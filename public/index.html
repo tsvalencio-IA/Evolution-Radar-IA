@@ -47,6 +47,12 @@
         <div class="actions"><button class="btn primary" type="submit">Aplicar filtros</button><button class="btn secondary" type="button" id="generateSearch">Pesquisar nas fontes</button><button class="btn ghost" type="button" id="resetFilters">Limpar</button></div>
       </form>
       <div id="searchLinks" class="panel" hidden></div>
+      <div class="panel" id="automaticSearch">
+        <div class="section-title"><h2>Pesquisa automática de anúncios</h2><span id="autoSearchState">Conector pendente</span></div>
+        <p class="micro">Busca na web com resultados indexados de fontes verificáveis. Mesmo com link, uma prévia não garante que a moto está disponível, nem confirma os filtros antes de abrir a página.</p>
+        <div class="actions"><button class="btn primary" type="button" id="automaticSearchButton">Pesquisar motos agora</button></div>
+        <div id="automaticResults" aria-live="polite"></div>
+      </div>
       <div class="panel"><div class="section-title"><h2>Resumo de evidências</h2><span>Histórico registrado</span></div>
         <div class="stats"><div class="stat"><strong id="statConfirmed">0</strong><span>Marcadas como conferidas</span></div><div class="stat"><strong id="statPending">0</strong><span>Leads pendentes</span></div><div class="stat"><strong id="statOutside">0</strong><span>Fora dos filtros</span></div></div>
         <p class="micro">Página marcada como conferida não comprova disponibilidade, documentação regular ou compra aprovada.</p>
