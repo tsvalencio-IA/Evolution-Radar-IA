@@ -31,7 +31,7 @@ export function isListingOrSearchUrl(value) {
   const u=new URL(safe),host=u.hostname,path=u.pathname;
   if((host==="www.google.com"||host==="google.com"||host==="www.bing.com"||host==="bing.com")&&path==="/search")return true;
   if(host==="lista.mercadolivre.com.br")return true;
-  if(host.endsWith(".olx.com.br")||host==="olx.com.br")return !/\/[0-9]{8,}$/.test(path);
+  if(host.endsWith(".olx.com.br")||host==="olx.com.br")return !/[-\/][0-9]{8,}$/.test(path);
   if(host.endsWith(".webmotors.com.br")||host==="webmotors.com.br")return !/\/[0-9]{5,}$/.test(path);
   return false;
 }
