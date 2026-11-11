@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {canonicalUrl,findDuplicate,evaluateLead,calculateScenario,csvExport,sourceSearches,isListingOrSearchUrl} from "../public/core.mjs";
 const f={brand:"Honda",model:"CG 160",version:"Titan",yearFrom:"2022",yearTo:"2024",yearType:"model",priceMax:"18000",kmMax:"40000",originCity:"São José do Rio Preto",uf:"SP",radiusKm:"150",sellerType:"all"};
-const lead={id:"a",brand:"Honda",model:"CG 160",version:"Titan",yearModel:2022,price:15800,km:25474,city:"São José do Rio Preto",uf:"SP",sellerType:"particular",url:"https://example.org/moto/1",evidence:"page"};
+const lead={id:"a",brand:"Honda",model:"CG 160",version:"Titan",yearModel:2022,price:15800,km:25474,city:"São José do Rio Preto",uf:"SP",sellerType:"particular",source:"OLX",url:"https://example.org/moto/1",evidence:"page"};
 test("sem anúncio fictício: lead verificado pode ser classificado, nunca como compra aprovada",()=>assert.equal(evaluateLead(lead,f).bucket,"compatible"));
 test("versão Fan é excluída",()=>assert.equal(evaluateLead({...lead,version:"Fan"},f).bucket,"outside"));
 test("anúncio sem KM fica pendente",()=>assert.equal(evaluateLead({...lead,km:null},f).bucket,"pending"));
