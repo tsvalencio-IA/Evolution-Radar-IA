@@ -27,36 +27,29 @@ Aplicativo Web responsivo/PWA para **pesquisa assistida**, registro de evidênci
 - \`firebase.json\`: hospedagem estática e regras de banco
 - \`tests/core.test.mjs\`: testes de filtros, duplicidade e cenários
 
-## Testar sem Firebase, custo R$ 0
+## Publicação no GitHub Pages, sem terminal
 
-Servir a pasta \`public\` por um servidor estático local ou Firebase Hosting. Exemplo em um PC com Node:
+A hospedagem escolhida nesta fase é **GitHub Pages**. O Firebase continuará responsável pelo login (Authentication) e pelo banco de dados (Realtime Database). Nenhum deploy pelo Firebase Hosting é necessário.
 
-\`\`\`sh
-npx --yes http-server public -p 8080 -c-1
-\`\`\`
+1. Acesse `https://github.com/tsvalencio-IA/Evolution-Radar-IA/settings/pages` na conta com permissão de administrador.
+2. Em **Build and deployment → Source**, selecione **GitHub Actions**.
+3. Clique em **Save**, se aparecer.
+4. O arquivo `.github/workflows/pages.yml` publica a pasta `public/` a partir de `desenvolvimento/base-evolution-radar`, depois de executar os testes. Em caso de falha inicial por Pages ainda não habilitado, salve a configuração e reexecute a publicação pela interface **Actions**.
+5. O endereço previsto após deploy confirmado é `https://tsvalencio-ia.github.io/Evolution-Radar-IA/`. Não declare o site publicado sem verificar a ação.
+6. Para login com Firebase, se aparecer erro `auth/unauthorized-domain`, confira **Firebase Console → Authentication → Settings → Authorized domains** e autorize exclusivamente `tsvalencio-ia.github.io` para este projeto.
+7. Teste login, gravação e recarregamento de registros. Confirme no Firebase que as regras restringem o acesso ao UID autenticado.
 
-Abra \`http://localhost:8080\`. Sem configuração do Firebase, os registros são gravados em **localStorage no navegador atual**. Utilize **Configurações → Baixar JSON** para backup. Limpar dados do navegador pode apagá-los; não é banco online.
+**Privacidade:** o site e seus arquivos estáticos são públicos; os dados precisam permanecer protegidos pelas regras do Realtime Database. O UID individual não deve ficar fixo no código.
 
-Execute \`npm test\` para os testes automáticos. Não há dependências NPM do aplicativo.
+**Condições de uso:** o GitHub Pages não é destinado a hospedar operações comerciais ou SaaS. Este deploy serve à validação técnica; para uso comercial contínuo, verifique a adequação aos termos do GitHub.
 
-## Ligar Firebase gratuito (projeto separado)
+## Configuração já informada pelo administrador
 
-1. Criar projeto exclusivo **Evolution Radar IA** no Firebase Console, no plano **Spark (gratuito)**. **Não habilitar plano Blaze nem cobrança sem aprovação explícita.**
-2. Ativar **Authentication → Email/Password**. Criar manualmente o usuário privado que utilizará o painel.
-3. Criar **Realtime Database**, com a região escolhida de forma consciente. **Não utilizar regras de teste públicas.**
-4. **Concluído no código:** aplicativo Web com `databaseURL` no arquivo `public/firebase-config.js`. Esses identificadores são públicos; **não** incluir senha, service account ou UID pessoal em código público.
-5. **Informado como concluído pelo administrador:** publicação das regras no Console. Verifique as regras no servidor; não as sobrescreva involuntariamente em deploys.
-6. Para disponibilizar o aplicativo no Firebase Hosting, usando o Console do projeto e o Cloud Shell (já autenticado):
-
-   ```sh
-   git clone --branch desenvolvimento/base-evolution-radar --single-branch https://github.com/tsvalencio-IA/Evolution-Radar-IA.git
-   cd Evolution-Radar-IA
-   npm run check
-   firebase deploy --only hosting --project evolution-radar-ia
-   ```
-
-   O site está na branch de desenvolvimento, e a `main` permanece sem o aplicativo. **Não execute `firebase deploy` sem `--only hosting`**, pois isso pode sobrescrever as regras definidas no Console. Não copie senhas no terminal.
-7. Abrir o domínio \`*.web.app\`, fazer login e testar criação/edição, backup, outro aparelho e regras de isolamento por usuário.
+- Firebase Web: `evolution-radar-ia`.
+- Realtime Database: `https://evolution-radar-ia-default-rtdb.firebaseio.com/`.
+- Login e-mail/senha: usuário cadastrado segundo o administrador.
+- Regras de segurança: administrador informou publicação; ainda exigem teste real.
+- Não ativar cobrança, Blaze, Cloud Shell ou serviço pago para testar o painel.
 
 **Migração local → Firebase:** antes de fazer login, baixe um backup JSON da aba Configurações. Depois de entrar na conta Firebase, importe esse backup. O sistema **não sobrescreve automaticamente dados remotos com dados locais**.
 
