@@ -31,7 +31,7 @@ export function classifySearchPage(url){
   const source=marketplaceName(u.href);
   const path=u.pathname.replace(/\/+$/,"");
   if(source==="OLX"){
-    return /\/\d{9,}$/.test(path)&&path.includes("/autos-e-pecas/motos/")?"individual-candidate":"catalog";
+    return /[-\/]\d{9,}$/.test(path)&&path.includes("/autos-e-pecas/motos/")?"individual-candidate":"catalog";
   }
   if(source==="Webmotors"){
     return /^\/comprar\/.+\/\d{5,}$/i.test(path)?"individual-candidate":"catalog";
