@@ -1,7 +1,7 @@
 # EVOLUTION RADAR IA
 **Evolution Motos · Powered by thIAguinho Soluções Digitais**
 
-Aplicativo Web responsivo/PWA para **pesquisa assistida**, registro de evidências de anúncios de motocicletas, filtros regionais e análise de compra e revenda.
+Aplicativo Web responsivo/PWA para pesquisa de motocicletas em fontes indexadas, análise conservadora de páginas individuais, filtros regionais, histórico e avaliação de revenda.
 
 ## Situação real (sem promessas indevidas)
 
@@ -11,8 +11,8 @@ Aplicativo Web responsivo/PWA para **pesquisa assistida**, registro de evidênci
 - Gera links de **pesquisa externa** para OLX, Webmotors, Mercado Livre, NaPista e revendas. **Esses links não são anúncios**.
 - Aceita anúncios inseridos pelo usuário, identifica URLs duplicadas, preserva data observada e link original.
 - A simulação de revenda calcula resultados **apenas se todos os custos forem preenchidos**. Resultado estimado não é lucro líquido garantido.
-- **Não há crawler, scraper, API de marketplaces, pesquisa de anúncios automática, FIPE conectada ou cálculo automático de distância.** Essas funções dependem de fontes/API reais e permissões e não foram simuladas.
-- **Firebase Web e Realtime Database configurados no código** para `evolution-radar-ia`. O administrador informou que já criou o usuário E-mail/Senha e publicou as regras no Console. O aplicativo ainda **não foi publicado nem testado com login real**.
+- **Busca online preparada e validada em integração inicial com Tavily/Cloudflare.** O protocolo avançado com até três buscas direcionadas, uma recuperação opcional e extração de até cinco anúncios está no GitHub, mas só ficará operacional após a **publicação do Worker atualizado**. Não existe API própria de marketplaces, FIPE conectada, cálculo automático de distância ou garantia de anúncios disponíveis.
+- **GitHub Pages e Firebase operacionais nos testes enviados pelo usuário**: autenticação, leitura, cadastro, edição, exclusão e persistência de dados. Esses testes não demonstram cobertura completa de anúncios. A atualização mais recente do radar depende de GitHub Actions e Cloudflare Builds para ficar pública.
 - Repositório deve ser separado dos aplicativos existentes da oficina.
 
 ## Estrutura
@@ -22,7 +22,7 @@ Aplicativo Web responsivo/PWA para **pesquisa assistida**, registro de evidênci
 - \`public/app.js\`: fluxos do painel
 - \`public/core.mjs\`: regras determinísticas e testáveis
 - \`public/firebase-client.js\`: login e sincronização sob demanda
-- \`public/firebase-config.js\`: configuração pública pendente
+- \`public/firebase-config.js\`: configuração pública existente do projeto Evolution Radar IA
 - \`database.rules.json\`: regras privadas por UID
 - \`firebase.json\`: hospedagem estática e regras de banco
 - \`tests/core.test.mjs\`: testes de filtros, duplicidade e cenários
@@ -53,6 +53,16 @@ A hospedagem escolhida nesta fase é **GitHub Pages**. O Firebase continuará re
 
 **Migração local → Firebase:** antes de fazer login, baixe um backup JSON da aba Configurações. Depois de entrar na conta Firebase, importe esse backup. O sistema **não sobrescreve automaticamente dados remotos com dados locais**.
 
+## Pesquisa externa e implantação do Worker
+
+- `public/search-config.js` identifica a URL pública de `evolution-radar-search.tsvalencio.workers.dev`.
+- `worker/evolution-search-worker.js`: mecanismo externo autenticado; consulta Tavily e separa catálogos de URLs individuais.
+- `wrangler.toml`: integração do **Worker existente** com GitHub Builds sem terminal no computador/celular.
+- [`docs/publicacao-cloudflare-sem-terminal.md`](docs/publicacao-cloudflare-sem-terminal.md): autorização inicial da conta Cloudflare para publicar via GitHub.
+- Os resultados extraídos são **pré-qualificados**, **pendentes** ou **fora do filtro**. Nunca equivalem a moto ativa ou compra autorizada.
+- No modo gratuito: até 3 buscas básicas mais 1 recuperação opcional; extração de até 5 URLs. Isso consome créditos da Tavily; sem Pay-as-you-go.
+- Sem distância de rota verificada, o raio fora da cidade de origem permanece pendente.
+
 ## Limitações e próximas integrações
 
 A cobertura de sites como OLX e Webmotors não pode ser assegurada por instruções de IA, pesquisa Google ou hospedagem Firebase. Para busca automatizada precisamos de conectores **permitidos, com endpoints reais verificáveis**, limites e testes de integridade. Não implantar coleta que contorne CAPTCHA, login ou bloqueios.
@@ -66,5 +76,5 @@ FIPE somente quando valor, mês e versão forem comprovados por fonte confiável
 - Salvar preferencialmente dados de anúncios comerciais, **não documentos pessoais de vendedores**.
 - Cada usuário autenticado só pode ler/gravar seu caminho `users/$uid`, de acordo com o arquivo de regras, desde que as mesmas regras estejam efetivamente publicadas no Firebase. Não há cadastro público na interface.
 - Se um usuário trabalha desconectado, **não** recebe sincronização automática; localStorage é por navegador e não deve ser tratado como backup durável.
-- GitHub Actions verifica sintaxe e testes. Não publica automaticamente e não consome uma chave Firebase.
+- GitHub Actions verifica sintaxe/testes e publica a pasta `public` no Pages. O Worker pode ser publicado automaticamente ao conectar o Worker existente ao repositório pela Cloudflare Builds; nenhuma chave administrativa está nos arquivos.
 - Verificar custos/quotas Firebase periodicamente; 'plano gratuito' não significa recursos ilimitados.
