@@ -154,7 +154,7 @@ export function searchPlan(f){
   const core=[text(f.brand),text(f.model),text(f.version)].filter(Boolean).join(" ");
   const city='"'+text(f.originCity).replace(/"/g,"")+'"';
   const years=[f.yearFrom,f.yearTo].filter(x=>isYear(x));
-  const query1=[core,years[0]||"","site:sp.olx.com.br/autos-e-pecas/motos",city,text(f.uf)].join(" ");
+  const query1=[core,years[0]||"","site:sp.olx.com.br",city,text(f.uf)].join(" ");
   const query2=[core,years[1]||years[0]||"","site:webmotors.com.br/comprar",city,text(f.uf)].join(" ");
   const middle=years.length===2&&Number(years[1])-Number(years[0])<=8?String(Math.floor((Number(years[0])+Number(years[1]))/2)):(years[0]||"");
   const query3=[core,middle,city,text(f.uf),"-Fan -Start moto venda"].join(" ");
@@ -179,7 +179,19 @@ async function collect(f,env){
   const succeeded=batches.filter(x=>x.status==="fulfilled").map(x=>x.value);
   if(!succeeded.length)throw Error(batches[0]?.reason?.message||"Nenhuma consulta concluída");
   const raw=succeeded.flatMap(data=>Array.isArray(data.results)?data.results:[]);
-  const pages=sources(raw);
+  let pages=sources(raw);
+  let recovered=false;
+  if(!pages.some(x=>listingType(x.url)==="individual-candidate")){
+    // Uma quarta busca focada só é consumida quando as buscas iniciais devolvem catálogos.
+    recovered=true;
+    const q=[text(f.brand),text(f.model),text(f.version),text(f.yearFrom||""),text(f.originCity),
+      "site:sp.olx.com.br", "R$", "km", "venda"].filter(Boolean).join(" ").slice(0,360);
+    try{
+      const next=await tavilyCall("search",{query:q,search_depth:"basic",max_results:15,
+        include_domains:ALLOWED_DOMAINS,include_answer:false,include_raw_content:false},env);
+      pages=sources([...raw,...(Array.isArray(next.results)?next.results:[])]);
+    }catch{/* Mantém resultados anteriores e informa cobertura parcial. */}
+  }
   const listed=pages.map(x=>({...x,pageType:listingType(x.url),source:marketplace(x.url),
       evidence:"index",extractionStatus:"not-attempted"}));
   const candidates=listed.filter(x=>x.pageType==="individual-candidate");
@@ -207,7 +219,7 @@ async function collect(f,env){
     assessment:{bucket:"catalog",reasons:["Página de resultados; nenhuma moto individual confirmada"]}}));
   return {source:"Tavily",query:plan[0],queries:plan,checkedAt:new Date().toISOString(),evidence:"index",
     items:[...individual,...catalogs].slice(0,20),coverage:{
-      queriesAttempted:plan.length,queriesSucceeded:succeeded.length,indexedLinks:listed.length,
+      queriesAttempted:plan.length+(recovered?1:0),queriesSucceeded:succeeded.length,indexedLinks:listed.length,
       individualLinks:individual.length,catalogPages:catalogs.length,
       extractionAttempted:selected.length,extractionSucceeded:extracted.length,extractionFailures:failures.length,
       prequalified:individual.filter(x=>x.assessment.bucket==="prequalified").length,
