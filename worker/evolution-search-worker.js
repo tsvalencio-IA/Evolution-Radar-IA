@@ -54,6 +54,162 @@ function sources(results){
     return [{title:String(item.title??"").slice(0,160),url:u.href,content:String(item.content??"").slice(0,800)}];
   }).slice(0,12);
 }
+
+// Pesquisa em duas fases: descobrir URLs; extrair somente anúncios individuais.
+// Dados incompletos sempre permanecem pendentes. Nenhum resultado equivale a compra aprovada.
+const searchMemory=new Map();
+function listingType(url){
+  let u;try{u=new URL(url);}catch{return "unknown";}
+  const path=u.pathname.replace(/\/+$/,"");
+  if(/(^|\.)olx\.com\.br$/i.test(u.hostname))
+    return /[-/]\d{9,}$/.test(path)&&path.includes("/autos-e-pecas/motos/")?"individual-candidate":"catalog";
+  if(/(^|\.)webmotors\.com\.br$/i.test(u.hostname))
+    return /^\/comprar\/.+\/\d{5,}$/i.test(path)?"individual-candidate":"catalog";
+  if(/(^|\.)mercadolivre\.com\.br$/i.test(u.hostname))
+    return /(?:^|[-/])MLB-?\d{7,}$/i.test(path)?"individual-candidate":"catalog";
+  return "catalog";
+}
+function marketplace(url){
+  const h=new URL(url).hostname;
+  if(h.endsWith("olx.com.br"))return "OLX";
+  if(h.endsWith("webmotors.com.br"))return "Webmotors";
+  if(h.endsWith("mercadolivre.com.br"))return "Mercado Livre";
+  return "NaPista";
+}
+function normalized(v){return String(v??"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/\s+/g," ").trim();}
+function numeric(v){
+  let s=String(v??"").replace(/[^\d.,]/g,"");
+  if(!s)return null;
+  if(s.includes(",")&&s.includes("."))s=s.replace(/\./g,"").replace(",",".");
+  else if(s.includes(","))s=s.replace(",",".");
+  else if(/^\d{1,3}(\.\d{3})+$/.test(s))s=s.replace(/\./g,"");
+  const n=Number(s);return Number.isFinite(n)&&n>=0?n:null;
+}
+function uniqueNumber(matches){
+  const entries=matches.map(m=>numeric(m[1])).filter(n=>n!==null);
+  const distinct=[...new Set(entries)];
+  return distinct.length===1?distinct[0]:null;
+}
+function parseFacts(page,title,f){
+  const t=String(page??"").slice(0,6500);
+  const price=uniqueNumber([
+    ...t.matchAll(/(?:pre[cç]o|valor(?:\s+total)?|à vista|a vista)\s*[:\n-]?\s*R\$\s*([\d.,]+)/gi),
+    ...t.matchAll(/R\$\s*([\d.,]+)\s*(?:a vista|à vista)/gi)
+  ]);
+  const km=uniqueNumber([
+    ...t.matchAll(/(?:quilometragem|km rodados|hod[oô]metro|km)\s*[:\n-]?\s*([\d.,]+)\s*(?:km)?\b/gi),
+    ...t.matchAll(/\b([\d.,]+)\s*km(?:\s+rodados)?\b/gi)
+  ]);
+  const yearPairs=[...t.matchAll(/\b((?:19|20)\d{2})\s*\/\s*((?:19|20)\d{2})\b/g)].map(m=>m[1]+"/"+m[2]);
+  const uniqueYears=[...new Set(yearPairs)];
+  const match=uniqueYears.length===1?uniqueYears[0].split("/").map(Number):null;
+  const city=normalized(f.originCity),body=normalized(t);
+  // Só a ocorrência na localização da página comprova a cidade.
+  const pos=body.indexOf(city);
+  const nearby=pos>=0?body.slice(Math.max(0,pos-45),pos):"";
+  const cityConfirmed=city.length>2&&/(?:localizacao|cidade|municipio|endereco)\s*[:\-\s]{0,12}$/.test(nearby);
+  return {
+    price,km,yearMake:match?match[0]:null,yearModel:match?match[1]:null,
+    city:cityConfirmed?f.originCity:null,uf:cityConfirmed?f.uf:null
+  };
+}
+function gradeListing(item,f){
+  const found=item.fields||{},title=normalized(item.title),reject=[],pending=[];
+  const contains=v=>title.includes(normalized(v));
+  if(f.brand&&!contains(f.brand))pending.push("Marca não comprovada no título");
+  if(f.model&&!normalized(f.model).split(" ").every(w=>title.includes(w)))pending.push("Modelo exato não comprovado");
+  if(f.version&&!contains(f.version)){
+    if(/\b(fan|start|titan|cargo)\b/.test(title))reject.push("Versão aparentemente diferente");
+    else pending.push("Versão não comprovada");
+  }
+  const y=found.yearModel;
+  if(f.yearFrom||f.yearTo){
+    if(y===null||y===undefined)pending.push("Ano-modelo não comprovado");
+    else if((f.yearFrom&&y<Number(f.yearFrom))||(f.yearTo&&y>Number(f.yearTo)))reject.push("Ano fora da faixa");
+  }
+  if(f.priceMax){
+    if(found.price===null||found.price===undefined)pending.push("Preço total não comprovado");
+    else if(found.price>Number(f.priceMax))reject.push("Preço acima do limite");
+  }
+  if(f.priceMin){
+    if(found.price===null||found.price===undefined)pending.push("Preço mínimo não comprovado");
+    else if(found.price<Number(f.priceMin))reject.push("Preço abaixo do mínimo");
+  }
+  if(f.kmMax){
+    if(found.km===null||found.km===undefined)pending.push("Quilometragem não comprovada");
+    else if(found.km>Number(f.kmMax))reject.push("KM acima do limite");
+  }
+  if(!found.city)pending.push("Localização não comprovada no anúncio");
+  if(f.radiusKm&&found.city&&normalized(found.city)!==normalized(f.originCity))
+    pending.push("Distância rodoviária não verificada");
+  if(item.extractionStatus!=="extracted")pending.push("Página individual não extraída");
+  return {bucket:reject.length?"outside":pending.length?"pending":"prequalified",
+    reasons:reject.length?reject:pending.length?pending:["Dados da página sugerem compatibilidade; confirmar vendedor, documentação e disponibilidade"]};
+}
+function searchPlan(f){
+  const core=[text(f.brand),text(f.model),text(f.version)].filter(Boolean).join(" ");
+  const city='"'+text(f.originCity).replace(/"/g,"")+'"';
+  const years=[f.yearFrom,f.yearTo].filter(x=>isYear(x));
+  const query1=[core,years[0]||"","site:sp.olx.com.br/autos-e-pecas/motos",city,text(f.uf)].join(" ");
+  const query2=[core,years[1]||years[0]||"","site:webmotors.com.br/comprar",city,text(f.uf)].join(" ");
+  const query3=[core,years.join(" "),city,text(f.uf),"-Fan -Start moto venda"].join(" ");
+  return [...new Set([query1,query2,query3].map(x=>x.slice(0,360)))];
+}
+async function tavilyCall(endpoint,body,env){
+  const ac=new AbortController(),timer=setTimeout(()=>ac.abort(),18000);
+  try{
+    const r=await fetch("https://api.tavily.com/"+endpoint,{
+      method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+env.TAVILY_API_KEY},
+      body:JSON.stringify(body),signal:ac.signal});
+    if(!r.ok)throw Error(r.status===429?"Cota de pesquisa atingida":"Erro externo HTTP "+r.status);
+    return await r.json();
+  }finally{clearTimeout(timer);}
+}
+async function collect(f,env){
+  const plan=searchPlan(f);
+  const batches=await Promise.allSettled(plan.map(query=>tavilyCall("search",{
+    query,search_depth:"basic",max_results:15,
+    include_domains:ALLOWED_DOMAINS,include_answer:false,include_raw_content:false
+  },env)));
+  const succeeded=batches.filter(x=>x.status==="fulfilled").map(x=>x.value);
+  if(!succeeded.length)throw Error(batches[0]?.reason?.message||"Nenhuma consulta concluída");
+  const raw=succeeded.flatMap(data=>Array.isArray(data.results)?data.results:[]);
+  const pages=sources(raw);
+  const listed=pages.map(x=>({...x,pageType:listingType(x.url),source:marketplace(x.url),
+      evidence:"index",extractionStatus:"not-attempted"}));
+  const candidates=listed.filter(x=>x.pageType==="individual-candidate");
+  let extracted=[],failures=[];
+  const selected=candidates.slice(0,5);
+  if(selected.length){
+    try{
+      const r=await tavilyCall("extract",{urls:selected.map(x=>x.url),extract_depth:"basic",
+        include_images:false,format:"markdown"},env);
+      extracted=Array.isArray(r.results)?r.results:[];
+      failures=Array.isArray(r.failed_results)?r.failed_results:[];
+    }catch(e){failures=selected.map(x=>({url:x.url,error:String(e.message)}));}
+  }
+  const bodies=new Map(extracted.map(x=>[x.url,String(x.raw_content??"")]));
+  const individual=candidates.map(x=>{
+    const content=bodies.get(x.url),done=!!content;
+    const item={...x,extractionStatus:done?"extracted":selected.some(v=>v.url===x.url)?"failed":"not-attempted",
+      fields:done?parseFacts(content,x.title,f):{price:null,km:null,yearMake:null,yearModel:null,city:null,uf:null}};
+    item.assessment=gradeListing(item,f);
+    return item;
+  });
+  const priority={prequalified:0,pending:1,outside:2};
+  individual.sort((a,b)=>(priority[a.assessment.bucket]??8)-(priority[b.assessment.bucket]??8));
+  const catalogs=listed.filter(x=>x.pageType==="catalog").map(x=>({...x,
+    assessment:{bucket:"catalog",reasons:["Página de resultados; nenhuma moto individual confirmada"]}}));
+  return {source:"Tavily",query:plan[0],queries:plan,checkedAt:new Date().toISOString(),evidence:"index",
+    items:[...individual,...catalogs].slice(0,20),coverage:{
+      queriesAttempted:plan.length,queriesSucceeded:succeeded.length,indexedLinks:listed.length,
+      individualLinks:individual.length,catalogPages:catalogs.length,
+      extractionAttempted:selected.length,extractionSucceeded:extracted.length,extractionFailures:failures.length,
+      prequalified:individual.filter(x=>x.assessment.bucket==="prequalified").length,
+      regionRadiusVerified:false
+    },notice:"Resultado indexado ou extraído de página. Não comprova disponibilidade, documentação ou distância de rota."};
+}
+
 export default {
   async fetch(request,env){
     if(request.method==="OPTIONS")return new Response(null,{status:204,headers:cors});
