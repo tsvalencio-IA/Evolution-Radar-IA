@@ -25,6 +25,17 @@ export function canonicalUrl(value) {
     return u.toString();
   } catch {return "";}
 }
+
+export function isListingOrSearchUrl(value) {
+  const safe=canonicalUrl(value);if(!safe)return false;
+  const u=new URL(safe),host=u.hostname,path=u.pathname;
+  if((host==="www.google.com"||host==="google.com"||host==="www.bing.com"||host==="bing.com")&&path==="/search")return true;
+  if(host==="lista.mercadolivre.com.br")return true;
+  if(host.endsWith(".olx.com.br")||host==="olx.com.br")return !/\/[0-9]{8,}$/.test(path);
+  if(host.endsWith(".webmotors.com.br")||host==="webmotors.com.br")return !/\/[0-9]{5,}$/.test(path);
+  return false;
+}
+
 export function validLead(input) {
   if (!input || typeof input!=="object" || Array.isArray(input)) return false;
   if(!input.id || typeof input.id!=="string") return false;
@@ -89,9 +100,11 @@ export function evaluateLead(lead, f=emptyFilters) {
   } else if(numberOrNull(f.radiusKm)!==null && numberOrNull(f.radiusKm)>0)unknown.push("Cidade de origem não definida para o raio");
   if(reasons.length)return {bucket:"outside",reasons};
   if(!lead.url||!canonicalUrl(lead.url))unknown.push("Link individual não informado");
-  if(lead.evidence!=="page")unknown.push("Página individual não conferida");
+  if(lead.url&&isListingOrSearchUrl(lead.url))unknown.push("Link de busca/listagem, não anúncio individual");
+  if(!lead.source)unknown.push("Fonte não identificada");
+  if(lead.evidence!=="page")unknown.push("Página individual não conferida pelo usuário");
   if(unknown.length)return {bucket:"pending",reasons:[...new Set(unknown)]};
-  return {bucket:"compatible",reasons:["Dados da página conferidos; disponibilidade e documentos ainda não comprovados"]};
+  return {bucket:"compatible",reasons:["Página declarada conferida pelo usuário; disponibilidade e documentos não comprovados"]};
 }
 export function sortLeads(leads,order="price") {
   return [...leads].sort((a,b)=>{

@@ -7,7 +7,7 @@ Aplicativo Web responsivo/PWA para **pesquisa assistida**, registro de evidênci
 
 - Funciona no navegador e pode guardar dados **localmente**, com backup JSON e exportação CSV.
 - Filtros de **marca, modelo exato, versão, ano-modelo/fabricação, preço, KM, município, UF, raio e vendedor** aplicados aos registros salvos.
-- Se falta dado obrigatório, o lead fica **pendente**. Se há incompatibilidade, **fora do filtro**. Se a página foi declarada conferida e os campos exigidos atendem, **página conferida**. Nenhum status equivale a disponibilidade ou compra aprovada.
+- Se falta dado obrigatório, o lead fica **pendente**. Se há incompatibilidade, **fora do filtro**. Se a página foi declarada conferida pelo usuário e os campos exigidos atendem, **página marcada como conferida pelo usuário**. Nenhum status equivale a disponibilidade ou compra aprovada.
 - Gera links de **pesquisa externa** para OLX, Webmotors, Mercado Livre, NaPista e revendas. **Esses links não são anúncios**.
 - Aceita anúncios inseridos pelo usuário, identifica URLs duplicadas, preserva data observada e link original.
 - A simulação de revenda calcula resultados **apenas se todos os custos forem preenchidos**. Resultado estimado não é lucro líquido garantido.

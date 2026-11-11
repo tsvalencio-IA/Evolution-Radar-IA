@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {canonicalUrl,findDuplicate,evaluateLead,calculateScenario,csvExport,sourceSearches} from "../public/core.mjs";
+import {canonicalUrl,findDuplicate,evaluateLead,calculateScenario,csvExport,sourceSearches,isListingOrSearchUrl} from "../public/core.mjs";
 const f={brand:"Honda",model:"CG 160",version:"Titan",yearFrom:"2022",yearTo:"2024",yearType:"model",priceMax:"18000",kmMax:"40000",originCity:"São José do Rio Preto",uf:"SP",radiusKm:"150",sellerType:"all"};
 const lead={id:"a",brand:"Honda",model:"CG 160",version:"Titan",yearModel:2022,price:15800,km:25474,city:"São José do Rio Preto",uf:"SP",sellerType:"particular",url:"https://example.org/moto/1",evidence:"page"};
 test("sem anúncio fictício: lead verificado pode ser classificado, nunca como compra aprovada",()=>assert.equal(evaluateLead(lead,f).bucket,"compatible"));
@@ -15,3 +15,5 @@ test("FIPE e lucro nunca são presumidos",()=>assert.equal(calculateScenario({pu
 test("lucro completo é cenário, não venda garantida",()=>{const r=calculateScenario({purchase:13000,resale:17000,transport:100,documents:200,repairs:100,labor:100,taxes:0,commissions:0,other:0});assert.equal(r.valid,true);assert.equal(r.outcome,3500);});
 test("buscas direcionadas são links de pesquisa, não anúncios",()=>assert.ok(sourceSearches(f)[0].url.includes("google.com/search")));
 test("CSV protege fórmulas perigosas",()=>assert.match(csvExport([{id:"=SUM(1,1)"}]),/'=SUM/));
+
+test("URLs de listagem não são anúncios individuais",()=>{assert.equal(isListingOrSearchUrl("https://lista.mercadolivre.com.br/honda-titan-usadas-2022"),true);assert.equal(evaluateLead({...lead,url:"https://lista.mercadolivre.com.br/honda-titan-usadas-2022",source:"Mercado Livre"},f).bucket,"pending");});

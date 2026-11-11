@@ -37,11 +37,11 @@ function renderCounts(groups){$("#statConfirmed").textContent=groups.compatible.
 function card(x,bucket){
   const url=canonicalUrl(x.url);
   const year=x.yearMake||x.yearModel?(x.yearMake??"?")+"/"+(x.yearModel??"?"):"Não informado";
-  const meta=[["Ano",year],["KM",x.km==null?"Não informado":Number(x.km).toLocaleString("pt-BR")],["Cidade",(x.city||"Não informada")+(x.uf?"/"+x.uf:"")],["Fonte",x.source||"Não informada"],["Evidência",x.evidence==="page"?"Página conferida":x.evidence==="provided"?"Link não conferido":"Índice/listagem"],["Consulta",x.observedAt||"Não informada"]];
-  return '<article class="lead-card"><div class="card-top"><h3 class="card-title">'+esc([x.brand,x.model,x.version].filter(Boolean).join(" "))+'</h3><span class="chip '+(bucket==="compatible"?"confirmed":bucket)+'">'+(bucket==="compatible"?"Página conferida":bucket==="pending"?"Pendente":"Fora do filtro")+'</span></div><div class="card-price">'+esc(money(x.price))+'</div><div class="card-meta">'+meta.map(([a,b])=>'<span>'+esc(a)+': <b>'+esc(b)+'</b></span>').join("")+'</div><p class="card-reason">'+esc(x.assessment.reasons.join(" · "))+'</p>'+(x.notes?'<p class="card-note">'+esc(x.notes)+'</p>':"")+'<div class="card-actions">'+(url?'<a class="btn secondary small" target="_blank" rel="noopener noreferrer" href="'+esc(url)+'">Abrir fonte ↗</a>':'<span class="chip">Sem link individual</span>')+'<button class="btn small" data-action="edit" data-id="'+esc(x.id)+'">Editar</button><button class="btn small" data-action="delete" data-id="'+esc(x.id)+'">Excluir</button></div></article>';
+  const meta=[["Ano",year],["KM",x.km==null?"Não informado":Number(x.km).toLocaleString("pt-BR")],["Cidade",(x.city||"Não informada")+(x.uf?"/"+x.uf:"")],["Fonte",x.source||"Não informada"],["Evidência",x.evidence==="page"?"Marcada como conferida":x.evidence==="provided"?"Link não conferido":"Índice/listagem"],["Consulta",x.observedAt||"Não informada"]];
+  return '<article class="lead-card"><div class="card-top"><h3 class="card-title">'+esc([x.brand,x.model,x.version].filter(Boolean).join(" "))+'</h3><span class="chip '+(bucket==="compatible"?"confirmed":bucket)+'">'+(bucket==="compatible"?"Marcada como conferida":bucket==="pending"?"Pendente":"Fora do filtro")+'</span></div><div class="card-price">'+esc(money(x.price))+'</div><div class="card-meta">'+meta.map(([a,b])=>'<span>'+esc(a)+': <b>'+esc(b)+'</b></span>').join("")+'</div><p class="card-reason">'+esc(x.assessment.reasons.join(" · "))+'</p>'+(x.notes?'<p class="card-note">'+esc(x.notes)+'</p>':"")+'<div class="card-actions">'+(url?'<a class="btn secondary small" target="_blank" rel="noopener noreferrer" href="'+esc(url)+'">Abrir fonte ↗</a>':'<span class="chip">Sem link individual</span>')+'<button class="btn small" data-action="edit" data-id="'+esc(x.id)+'">Editar</button><button class="btn small" data-action="delete" data-id="'+esc(x.id)+'">Excluir</button></div></article>';
 }
 function renderLeads(groups){
-  const info=[["compatible","Páginas conferidas"],["pending","Oportunidades pendentes"],["outside","Fora dos critérios"]];
+  const info=[["compatible","Marcadas como conferidas"],["pending","Oportunidades pendentes"],["outside","Fora dos critérios"]];
   $("#leadGroups").innerHTML=info.map(([key,title])=>'<section><div class="group-head"><h2>'+title+'</h2><span>'+groups[key].length+'</span></div>'+(groups[key].length?'<div class="cards">'+groups[key].map(x=>card(x,key)).join("")+'</div>':'<div class="empty-state">Nenhum registro nesta categoria. Isso não significa ausência de motos na internet.</div>')+'</section>').join("");
 }
 function renderFinanceOptions(){
@@ -71,7 +71,7 @@ async function storeLead(e){
   e.preventDefault();
   if(state.mode==="loading")return notice("Aguarde a sincronização.");
   const l=readLead();if(!l)return notice("Registro inválido. Confira valores e URL.");
-  if(l.evidence==="page"&&!l.url)return notice("Para marcar página conferida, informe seu link individual.");
+  if(l.evidence==="page"&&!l.url)return notice("Para marcar página declarada conferida, informe seu link individual.");
   const dupe=findDuplicate(l,state.leads);
   if(dupe?.type==="same-url")return notice("Esse link já existe no histórico. Edite o registro existente.");
   if(dupe?.type==="possible-same-bike"&&!confirm("Possível duplicidade: preço, KM, ano e cidade iguais. Registrar mesmo assim?"))return;
