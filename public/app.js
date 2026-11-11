@@ -38,12 +38,21 @@ function displayDiscovery(items,metadata){
   latestDiscovered=items;
   const panel=$("#automaticResults");
   if(!items.length){
-    panel.innerHTML='<div class="empty-state">Nenhum resultado encontrado nessa consulta. Isso não comprova ausência de motos à venda. Tente outras palavras ou fontes.</div>';
+    panel.innerHTML='<div class="empty-state">A busca não retornou páginas indexadas das fontes consultadas. Isso não significa ausência de motos à venda.</div>';
     return;
   }
-  panel.innerHTML='<p class="micro"><strong>'+items.length+' resultado(s) de pesquisa indexada</strong> · '+esc(metadata.source||"Buscador")+' · '+esc(metadata.checkedAt||"Data não informada")+'. Não são anúncios confirmados nem compras aprovadas.</p><div class="cards">'+items.map((x,i)=>
-    '<article class="lead-card"><div class="card-top"><h3 class="card-title">'+esc(x.title)+'</h3><span class="chip pending">Não verificado</span></div><p class="card-note">'+esc(x.snippet||"Sem descrição disponibilizada pela fonte")+'</p><p class="micro">'+esc(x.source)+' · Dados indexados</p><div class="card-actions"><a class="btn secondary small" target="_blank" rel="noopener noreferrer" href="'+esc(x.url)+'">Abrir página de origem ↗</a><button type="button" class="btn small" data-discovery="'+i+'">Registrar como lead</button></div></article>').join("")+'</div>';
+  const individual=items.map((item,i)=>({...item,originalIndex:i})).filter(x=>x.pageType==="individual-candidate");
+  const catalogs=items.map((item,i)=>({...item,originalIndex:i})).filter(x=>x.pageType!=="individual-candidate");
+  const header='<p class="micro"><strong>'+individual.length+' link(s) com formato de anúncio individual</strong> · '+catalogs.length+' página(s) de catálogo/listagem · '+esc(metadata.source||"Buscador")+' · '+esc(metadata.checkedAt||"Data não informada")+'. Nenhum resultado foi verificado como anúncio ativo ou dentro dos filtros.</p>';
+  const group=(list,kind)=>'<div class="cards">'+list.map(x=>
+    '<article class="lead-card"><div class="card-top"><h3 class="card-title">'+esc(x.title)+'</h3><span class="chip pending">'+(kind==="individual"?"Link candidato":"Catálogo/listagem")+'</span></div><p class="card-note">'+esc(x.snippet||"Sem trecho da fonte")+'</p><p class="micro">'+esc(x.source)+' · Pesquisa indexada, não validada</p><div class="card-actions"><a class="btn secondary small" target="_blank" rel="noopener noreferrer" href="'+esc(x.url)+'">Abrir origem ↗</a>'+(kind==="individual"?'<button type="button" class="btn small" data-discovery="'+x.originalIndex+'">Investigar e registrar</button>':'')+'</div></article>').join("")+'</div>';
+  panel.innerHTML=header+
+    '<section><h3>Links candidatos a anúncios individuais ('+individual.length+')</h3>'+
+    (individual.length?group(individual,"individual"):'<div class="empty-state">Nenhum link individual identificado nesta pesquisa. Não há motos confirmadas; as páginas de catálogo abaixo podem servir para investigação manual.</div>')+'</section>'+
+    '<section><h3>Páginas de catálogo ('+catalogs.length+')</h3>'+
+    (catalogs.length?group(catalogs,"catalog"):'<div class="empty-state">Nenhuma página de catálogo.</div>')+'</section>';
 }
+
 async function automaticSearch(){
   const f=readFilters();
   if(!validFilters(f))return;
@@ -89,14 +98,16 @@ async function automaticSearch(){
   }
 }
 function registerDiscovery(index){
-  const item=latestDiscovered[index];if(!item)return;
-  const f=lastDiscoveryFilters||state.filters;
+  const item=latestDiscovered[index];
+  if(!item||item.pageType!=="individual-candidate")return;
   openLead(null);
   setForm($("#leadForm"),{
-    brand:f.brand||"",model:f.model||"",version:f.version||"",
+    brand:"",model:"",version:"",
     city:"",uf:"",source:item.source,url:item.url,evidence:"index",
-    notes:"Pista encontrada em pesquisa indexada. NÃO verificada na página individual. Título: "+item.title+"\nTrecho: "+item.snippet+"\nVerificar modelo, versão, ano, KM, preço e cidade antes de classificar."
+    notes:"URL candidata a anúncio individual, encontrada em busca indexada; ainda NÃO verificada. Título: "+item.title+"\nTrecho: "+item.snippet+"\nPreencha marca, modelo, versão, ano, KM, preço e cidade apenas após verificar a página original."
   });
+  $("#leadForm").elements.namedItem("brand").focus();
+  notice("Confira a página de origem e preencha apenas dados comprovados. Os filtros pesquisados não são informações verificadas do anúncio.");
   $("#leadDialog").scrollTop=0;
 }
 
