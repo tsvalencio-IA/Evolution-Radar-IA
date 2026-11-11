@@ -1,0 +1,11 @@
+{
+  "name": "evolution-radar-ia",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Painel privado de pesquisa assistida e análise de oportunidades de motos",
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check public/app.js && node --check public/firebase-client.js && node --check public/core.mjs && node --test"
+  }
+}

@@ -1,0 +1,17 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {canonicalUrl,findDuplicate,evaluateLead,calculateScenario,csvExport,sourceSearches} from "../public/core.mjs";
+const f={brand:"Honda",model:"CG 160",version:"Titan",yearFrom:"2022",yearTo:"2024",yearType:"model",priceMax:"18000",kmMax:"40000",originCity:"São José do Rio Preto",uf:"SP",radiusKm:"150",sellerType:"all"};
+const lead={id:"a",brand:"Honda",model:"CG 160",version:"Titan",yearModel:2022,price:15800,km:25474,city:"São José do Rio Preto",uf:"SP",sellerType:"particular",url:"https://example.org/moto/1",evidence:"page"};
+test("sem anúncio fictício: lead verificado pode ser classificado, nunca como compra aprovada",()=>assert.equal(evaluateLead(lead,f).bucket,"compatible"));
+test("versão Fan é excluída",()=>assert.equal(evaluateLead({...lead,version:"Fan"},f).bucket,"outside"));
+test("anúncio sem KM fica pendente",()=>assert.equal(evaluateLead({...lead,km:null},f).bucket,"pending"));
+test("município distinto sem distância verificada fica pendente",()=>assert.equal(evaluateLead({...lead,city:"Urupês"},f).bucket,"pending"));
+test("distância informada sem prova fica pendente",()=>assert.equal(evaluateLead({...lead,city:"Urupês",distanceKm:90,distanceVerified:false},f).bucket,"pending"));
+test("distância verificada acima do raio exclui",()=>assert.equal(evaluateLead({...lead,city:"Urupês",distanceKm:180,distanceVerified:true},f).bucket,"outside"));
+test("URL com tracking não cria duplicata nova",()=>assert.equal(canonicalUrl("https://example.org/moto/1?utm_source=abc"),"https://example.org/moto/1"));
+test("deduplicação exata",()=>assert.equal(findDuplicate({...lead,id:"b",url:"https://example.org/moto/1?utm_source=abc"},[lead]).type,"same-url"));
+test("FIPE e lucro nunca são presumidos",()=>assert.equal(calculateScenario({purchase:"13000",resale:"17000"}).valid,false));
+test("lucro completo é cenário, não venda garantida",()=>{const r=calculateScenario({purchase:13000,resale:17000,transport:100,documents:200,repairs:100,labor:100,taxes:0,commissions:0,other:0});assert.equal(r.valid,true);assert.equal(r.outcome,3500);});
+test("buscas direcionadas são links de pesquisa, não anúncios",()=>assert.ok(sourceSearches(f)[0].url.includes("google.com/search")));
+test("CSV protege fórmulas perigosas",()=>assert.match(csvExport([{id:"=SUM(1,1)"}]),/'=SUM/));

@@ -1,0 +1,19 @@
+{
+  "name": "Evolution Radar IA — Evolution Motos",
+  "short_name": "Evolution Radar",
+  "description": "Pesquisa assistida verificável de motocicletas e análise de compra e revenda",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#091321",
+  "theme_color": "#0c1626",
+  "lang": "pt-BR",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
