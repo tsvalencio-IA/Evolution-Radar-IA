@@ -12,7 +12,7 @@ Aplicativo Web responsivo/PWA para **pesquisa assistida**, registro de evidênci
 - Aceita anúncios inseridos pelo usuário, identifica URLs duplicadas, preserva data observada e link original.
 - A simulação de revenda calcula resultados **apenas se todos os custos forem preenchidos**. Resultado estimado não é lucro líquido garantido.
 - **Não há crawler, scraper, API de marketplaces, pesquisa de anúncios automática, FIPE conectada ou cálculo automático de distância.** Essas funções dependem de fontes/API reais e permissões e não foram simuladas.
-- **Firebase ainda não está configurado**. Não há qualquer banco criado nem deploy efetivado por este repositório.
+- **Firebase Web e Realtime Database configurados no código** para `evolution-radar-ia`. O administrador informou que já criou o usuário E-mail/Senha e publicou as regras no Console. O aplicativo ainda **não foi publicado nem testado com login real**.
 - Repositório deve ser separado dos aplicativos existentes da oficina.
 
 ## Estrutura
@@ -44,15 +44,18 @@ Execute \`npm test\` para os testes automáticos. Não há dependências NPM do 
 1. Criar projeto exclusivo **Evolution Radar IA** no Firebase Console, no plano **Spark (gratuito)**. **Não habilitar plano Blaze nem cobrança sem aprovação explícita.**
 2. Ativar **Authentication → Email/Password**. Criar manualmente o usuário privado que utilizará o painel.
 3. Criar **Realtime Database**, com a região escolhida de forma consciente. **Não utilizar regras de teste públicas.**
-4. Copiar a configuração do aplicativo Web para \`public/firebase-config.js\`, com \`apiKey\`, \`authDomain\`, \`databaseURL\`, \`projectId\` e \`appId\`. Essa configuração é pública; **nunca** incluir credenciais de administrador, senha ou service account. A proteção dos dados depende de Authentication e \`database.rules.json\`.
-5. Aplicar \`database.rules.json\` na aba **Rules** do Realtime Database antes de criar dados.
-6. Para disponibilizar o PWA, usar **Firebase Hosting**. Se utilizar Firebase CLI:
-   \`\`\`sh
-   npx firebase-tools login
-   npx firebase-tools use --add
-   npx firebase-tools deploy --only hosting,database
-   \`\`\`
-   Verifique no Console que o projeto correto foi selecionado. Esses comandos exigem autorização na conta e quotas disponíveis no Spark.
+4. **Concluído no código:** aplicativo Web com `databaseURL` no arquivo `public/firebase-config.js`. Esses identificadores são públicos; **não** incluir senha, service account ou UID pessoal em código público.
+5. **Informado como concluído pelo administrador:** publicação das regras no Console. Verifique as regras no servidor; não as sobrescreva involuntariamente em deploys.
+6. Para disponibilizar o aplicativo no Firebase Hosting, usando o Console do projeto e o Cloud Shell (já autenticado):
+
+   ```sh
+   git clone --branch desenvolvimento/base-evolution-radar --single-branch https://github.com/tsvalencio-IA/Evolution-Radar-IA.git
+   cd Evolution-Radar-IA
+   npm run check
+   firebase deploy --only hosting --project evolution-radar-ia
+   ```
+
+   O site está na branch de desenvolvimento, e a `main` permanece sem o aplicativo. **Não execute `firebase deploy` sem `--only hosting`**, pois isso pode sobrescrever as regras definidas no Console. Não copie senhas no terminal.
 7. Abrir o domínio \`*.web.app\`, fazer login e testar criação/edição, backup, outro aparelho e regras de isolamento por usuário.
 
 **Migração local → Firebase:** antes de fazer login, baixe um backup JSON da aba Configurações. Depois de entrar na conta Firebase, importe esse backup. O sistema **não sobrescreve automaticamente dados remotos com dados locais**.
@@ -68,7 +71,7 @@ FIPE somente quando valor, mês e versão forem comprovados por fonte confiável
 ## Segurança e manutenção
 
 - Salvar preferencialmente dados de anúncios comerciais, **não documentos pessoais de vendedores**.
-- Cada usuário autenticado pode ler/gravar exclusivamente \`/users/$uid\`; não há cadastro público na interface.
+- Cada usuário autenticado só pode ler/gravar seu caminho `users/$uid`, de acordo com o arquivo de regras, desde que as mesmas regras estejam efetivamente publicadas no Firebase. Não há cadastro público na interface.
 - Se um usuário trabalha desconectado, **não** recebe sincronização automática; localStorage é por navegador e não deve ser tratado como backup durável.
 - GitHub Actions verifica sintaxe e testes. Não publica automaticamente e não consome uma chave Firebase.
 - Verificar custos/quotas Firebase periodicamente; 'plano gratuito' não significa recursos ilimitados.
