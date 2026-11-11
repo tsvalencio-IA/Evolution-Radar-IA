@@ -1,4 +1,4 @@
-// URL pública do Worker de pesquisa. Isto não é senha.
-// DEIXE VAZIA até configurar Cloudflare Worker + segredo TAVILY_API_KEY.
-// Ex.: https://evolution-search.NOME.workers.dev
-export const searchWorkerUrl = "";
+// URL pública do Cloudflare Worker Evolution Radar IA. Não contém senha.
+// TAVILY_API_KEY e ALLOWED_UID são secretos no painel Cloudflare, nunca aqui.
+// A pesquisa exige sessão Firebase autenticada e retorna apenas pistas indexadas.
+export const searchWorkerUrl = "https://evolution-radar-search.tsvalencio.workers.dev";
