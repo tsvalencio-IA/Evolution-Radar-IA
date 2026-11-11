@@ -63,6 +63,16 @@ A hospedagem escolhida nesta fase é **GitHub Pages**. O Firebase continuará re
 - No modo gratuito: até 3 buscas básicas mais 1 recuperação opcional; extração de até 5 URLs. Isso consome créditos da Tavily; sem Pay-as-you-go.
 - Sem distância de rota verificada, o raio fora da cidade de origem permanece pendente.
 
+## Assistente próprio (sem API OpenAI)
+
+- A interface contém um pedido em linguagem natural e ditado por microfone quando o navegador oferece reconhecimento de fala.
+- O Worker interpreta o texto com `@cf/zai-org/glm-4.7-flash` em Workers AI, protegido pelo mesmo token Firebase e UID já autorizados. O navegador nunca recebe uma chave de IA.
+- O modelo **não pesquisa anúncios diretamente**; ele devolve filtros. A Tavily continua sendo o motor de pesquisa, com os limites e as verificações anteriores.
+- Ao concluir cada pesquisa com êxito, o aplicativo tenta registrar filtros, fonte, data, cobertura e resultados no caminho privado `users/$uid/searchHistory` do Firebase, separado dos leads existentes. Se a gravação falhar, a interface avisa explicitamente.
+- A nova rota `/interpret` precisa ser publicada no Worker Cloudflare existente com o binding `[ai] binding = "AI"`. A inclusão no GitHub não comprova que a Cloudflare já recebeu o deploy.
+- Cloudflare Workers AI tem franquia gratuita diária e pode limitar o uso; nenhuma cobrança ou plano pago é necessário para os testes básicos, mas não há garantia de disponibilidade. O Worker retorna erro transparente se a IA estiver indisponível.
+- O histórico exibe as últimas 50 pesquisas e seu backup JSON inclui essas 50 entradas recentes. Reabrir uma pesquisa não gasta crédito de busca.
+
 ## Limitações e próximas integrações
 
 A cobertura de sites como OLX e Webmotors não pode ser assegurada por instruções de IA, pesquisa Google ou hospedagem Firebase. Para busca automatizada precisamos de conectores **permitidos, com endpoints reais verificáveis**, limites e testes de integridade. Não implantar coleta que contorne CAPTCHA, login ou bloqueios.

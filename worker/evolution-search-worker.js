@@ -227,12 +227,70 @@ async function collect(f,env){
     },notice:"Resultado indexado ou extraído de página. Não comprova disponibilidade, documentação ou distância de rota."};
 }
 
+
+// Interpretação de pedido por IA: retorna apenas campos estruturados e jamais confirma anúncios.
+const intentCache=new Map();
+export function safeIntent(raw){
+  if(!raw||typeof raw!=="object"||Array.isArray(raw))return {};
+  const out={};
+  for(const key of ["brand","model","version","originCity"]){
+    if(typeof raw[key]==="string"&&raw[key].trim())out[key]=raw[key].trim().slice(0,100);
+  }
+  const uf=String(raw.uf??"").trim().toUpperCase();
+  if(/^[A-Z]{2}$/.test(uf))out.uf=uf;
+  if(raw.yearType==="make"||raw.yearType==="model")out.yearType=raw.yearType;
+  if(["all","particular","loja"].includes(raw.sellerType))out.sellerType=raw.sellerType;
+  for(const key of ["yearFrom","yearTo"]){
+    if(/^(19|20)\d{2}$/.test(String(raw[key]??"")))out[key]=String(raw[key]);
+  }
+  for(const key of ["priceMin","priceMax","kmMax","radiusKm"]){
+    const value=raw[key];
+    if(value===null||value===undefined||value==="")continue;
+    if((typeof value==="number"||typeof value==="string")&&/^\d+(?:\.\d+)?$/.test(String(value))&&Number.isFinite(Number(value))&&Number(value)>=0){
+      out[key]=String(value);
+    }
+  }
+  return out;
+}
+function intentText(result){
+  const value=result?.response??result?.choices?.[0]?.message?.content??result?.result?.response;
+  return typeof value==="string"?value:Array.isArray(value)?value.map(x=>x?.text||"").join(""):"";
+}
+async function interpretRequest(message,uid,env){
+  if(!env.AI?.run)return response({error:"Workers AI ainda não foi vinculado ao Worker publicado."},503);
+  const prompt=String(message??"").trim();
+  if(prompt.length<5||prompt.length>450)return response({error:"Descreva a moto em até 450 caracteres."},400);
+  const cacheKey=uid+":"+prompt.toLocaleLowerCase("pt-BR");
+  const saved=intentCache.get(cacheKey);
+  if(saved&&Date.now()-saved.time<600000)return response({...saved.data,cache:true});
+  try{
+    const model=await env.AI.run("@cf/zai-org/glm-4.7-flash",{
+      messages:[
+        {role:"system",content:"Você extrai exclusivamente filtros de pesquisa de motos usadas de um pedido em português brasileiro. Responda APENAS com um objeto JSON válido sem markdown, sem texto adicional, com as chaves opcionais: brand, model, version, yearType (model ou make), yearFrom, yearTo, priceMin, priceMax, kmMax, originCity, uf, radiusKm, sellerType (all, particular, loja). Nunca invente filtros ausentes. Se o pedido citar um único ano, use yearFrom e yearTo iguais. Dinheiro em reais como número simples (ex: oito mil = 8000). Cidade e UF apenas se explicitamente fornecidas ou inequivocamente identificáveis pelo nome geográfico. Se estiver ambíguo, omita o campo."},
+        {role:"user",content:prompt}
+      ],
+      max_completion_tokens:400,temperature:0,stream:false
+    });
+    const raw=intentText(model),start=raw.indexOf("{"),end=raw.lastIndexOf("}");
+    if(start<0||end<=start)throw Error("Resposta sem filtros estruturados");
+    const filters=safeIntent(JSON.parse(raw.slice(start,end+1)));
+    if(!filters.brand&&!filters.model&&!filters.version)throw Error("Marca e modelo não reconhecidos");
+    const data={filters,mode:"workers-ai",model:"glm-4.7-flash",notice:"Filtros interpretados por IA; confira os campos antes de considerar qualquer anúncio."};
+    if(intentCache.size>30)intentCache.clear();
+    intentCache.set(cacheKey,{time:Date.now(),data});
+    return response({...data,cache:false});
+  }catch(e){
+    return response({error:"IA não concluiu a interpretação. Use os filtros manuais enquanto isso.",detail:String(e?.message||"erro").slice(0,120)},502);
+  }
+}
+
 export default {
   async fetch(request,env){
     if(request.method==="OPTIONS")return new Response(null,{status:204,headers:cors});
-    if(new URL(request.url).pathname!=="/search"||request.method!=="POST")return response({error:"Endpoint inexistente"},404);
+    const endpoint=new URL(request.url).pathname;
+    if(!["/search","/interpret"].includes(endpoint)||request.method!=="POST")return response({error:"Endpoint inexistente"},404);
     if(request.headers.get("Origin")!==ORIGIN)return response({error:"Origem não autorizada"},403);
-    if(!env.TAVILY_API_KEY||!env.ALLOWED_UID||!env.FIREBASE_WEB_API_KEY)return response({error:"Conector não configurado"},503);
+    if(!env.ALLOWED_UID||!env.FIREBASE_WEB_API_KEY||(endpoint==="/search"&&!env.TAVILY_API_KEY))return response({error:"Conector não configurado"},503);
     const token=(request.headers.get("Authorization")||"").replace(/^Bearer\s+/i,"");
     if(token.length<100||token.length>5000)return response({error:"Login obrigatório"},401);
     let valid;
@@ -240,6 +298,7 @@ export default {
     if(!valid)return response({error:"Usuário não autorizado"},403);
     let payload;
     try{if(Number(request.headers.get("Content-Length")||0)>4000)return response({error:"Requisição muito grande"},413);payload=await request.json();}catch{return response({error:"JSON inválido"},400);}
+    if(endpoint==="/interpret")return interpretRequest(payload?.message,valid,env);
     if(!validFilters(payload?.filters))return response({error:"Informe marca, modelo, cidade e UF válidos"},400);
     // Limite de consumo: cada consulta faz até 3 buscas básicas e até 5 extrações básicas.
     // Repetições no mesmo isolate dentro de 10 min usam cache após validar Firebase.

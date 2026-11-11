@@ -26,6 +26,12 @@
     <section id="view-pesquisa" class="view active">
       <div class="hero"><div><p class="eyebrow">INTELIGÊNCIA DE MERCADO</p><h1>Encontre a próxima oportunidade.</h1><p>Filtros rigorosos, links originais, evidências verificáveis. Sem preços ou resultados inventados.</p></div><span class="hero-art" aria-hidden="true">◎</span></div>
       <div class="notice"><strong>Pesquisa assistida:</strong> esta primeira versão abre pesquisas externas e permite registrar anúncios conferidos. Ainda não possui acesso automático aos classificados.</div>
+      <div class="panel" id="assistantPanel">
+        <div class="section-title"><h2>Assistente de pesquisa IA</h2><span>Cloudflare Workers AI</span></div>
+        <label>Descreva a moto que deseja encontrar<textarea id="assistantPrompt" rows="3" maxlength="450" placeholder="Ex.: Procure Yamaha Factor 125 ano 2012 até R$ 8.000 em São José do Rio Preto, SP"></textarea></label>
+        <div class="actions"><button class="btn primary" id="assistantSend" type="button">Interpretar e pesquisar</button><button class="btn secondary" id="assistantMic" type="button" hidden>🎙 Ditar pedido</button></div>
+        <p class="micro" id="assistantReply" role="status" aria-live="polite">A IA interpreta os filtros, a Tavily pesquisa e o histórico é salvo no Firebase. Dados de anúncios não serão inventados.</p>
+      </div>
       <form id="filterForm" class="panel">
         <div class="section-title"><h2>Filtros da pesquisa</h2><span>Respeitados quando preenchidos</span></div>
         <div class="form-grid">
@@ -52,6 +58,11 @@
         <p class="micro">Busca na web com resultados indexados de fontes verificáveis. Mesmo com link, uma prévia não garante que a moto está disponível, nem confirma os filtros antes de abrir a página.</p>
         <div class="actions"><button class="btn primary" type="button" id="automaticSearchButton">Pesquisar motos agora</button></div>
         <div id="automaticResults" aria-live="polite"></div>
+      </div>
+      <div class="panel" id="searchHistoryPanel">
+        <div class="section-title"><h2>Histórico de pesquisas</h2><span>Firebase · até 50 recentes</span></div>
+        <p class="micro">Consultas e resultados guardados por usuário. Reabrir um histórico não faz nova consulta à Tavily.</p>
+        <div id="searchHistory" aria-live="polite"><p class="micro">Entre na sua conta Firebase para consultar o histórico.</p></div>
       </div>
       <div class="panel"><div class="section-title"><h2>Resumo de evidências</h2><span>Histórico registrado</span></div>
         <div class="stats"><div class="stat"><strong id="statConfirmed">0</strong><span>Marcadas como conferidas</span></div><div class="stat"><strong id="statPending">0</strong><span>Leads pendentes</span></div><div class="stat"><strong id="statOutside">0</strong><span>Fora dos filtros</span></div></div>

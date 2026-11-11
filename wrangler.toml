@@ -5,3 +5,7 @@ name = "evolution-radar-search"
 main = "worker/evolution-search-worker.js"
 compatibility_date = "2026-11-11"
 workers_dev = true
+
+# Modelo gratuito sujeito à franquia diária; nenhum serviço pago será ativado.
+[ai]
+binding = "AI"

@@ -5,7 +5,7 @@ import {searchQuery,normalizeWebLeads} from "./search-engine.mjs";
 import {openFirebase} from "./firebase-client.js";
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const LOCAL="evolution-radar-ia-local-v1",THEME="evolution-radar-ia-theme";
-const state={filters:{...emptyFilters},leads:[],mode:"local",firebase:null,user:null,remoteReady:false};
+const state={filters:{...emptyFilters},leads:[],history:[],mode:"local",firebase:null,user:null,remoteReady:false};
 const labels={purchase:"compra",resale:"revenda",transport:"transporte",documents:"documentos",repairs:"reparos",labor:"mão de obra",taxes:"taxas",commissions:"comissões",other:"outros custos"};
 let toastTimer,saveQueue=Promise.resolve(),latestDiscovered=[],lastDiscoveryFilters=null;
 const esc=x=>String(x??"").replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
@@ -78,7 +78,7 @@ function displayDiscovery(items,metadata){
     (groups[type.key].length?'<div class="cards">'+groups[type.key].map(card).join("")+'</div>':'<div class="empty-state">Nenhum resultado desta categoria nesta consulta.</div>')+'</section>').join("");
 }
 
-async function automaticSearch(){
+async function automaticSearch({requestText=""}={}){
   const f=readFilters();
   if(!validFilters(f))return;
   if(!f.brand.trim()||!f.model.trim()||!f.originCity.trim()||!f.uf.trim()){
@@ -114,6 +114,18 @@ async function automaticSearch(){
     const items=normalizeWebLeads(data?.items);
     displayDiscovery(items,data);
     $("#autoSearchState").textContent="Consulta realizada";
+    try{
+      if(!state.firebase||state.mode!=="remote")throw Error("Firebase não sincronizado");
+      await state.firebase.saveSearch({
+        requestText:String(requestText).slice(0,450),filters:f,source:data.source||"Tavily",
+        checkedAt:data.checkedAt||new Date().toISOString(),coverage:data.coverage||{},
+        items:(Array.isArray(data.items)?data.items:[]).slice(0,20)
+      });
+      $("#autoSearchState").textContent="Consulta salva no Firebase";
+    }catch(e){
+      $("#autoSearchState").textContent="Consulta feita, histórico não salvo";
+      notice("A consulta apareceu, mas o histórico não foi salvo: "+(e?.message||"erro"));
+    }
   }catch(e){
     latestDiscovered=[];
     output.innerHTML='<div class="empty-state">'+esc(e?.message||"Pesquisa indisponível")+'</div>';
@@ -136,6 +148,73 @@ function registerDiscovery(index){
   $("#leadDialog").scrollTop=0;
 }
 
+
+function renderHistory(){
+  const panel=$("#searchHistory"),entries=state.history;
+  if(!state.user){panel.innerHTML='<div class="empty-state">Entre no Firebase para recuperar suas pesquisas salvas.</div>';return;}
+  if(!entries.length){panel.innerHTML='<div class="empty-state">Nenhuma pesquisa salva nesta conta.</div>';return;}
+  panel.innerHTML='<div class="cards">'+entries.slice(0,50).map((x,i)=>{
+    const f=x.filters||{},name=[f.brand,f.model,f.version].filter(Boolean).join(" ");
+    const count=Array.isArray(x.items)?x.items.length:0;
+    return '<article class="lead-card"><h3 class="card-title">'+esc(name||"Pesquisa")+'</h3><p class="micro">'+esc(x.createdAt||x.checkedAt||"Sem data")+' · '+count+' páginas indexadas</p>'+
+      (x.requestText?'<p class="card-note">'+esc(x.requestText)+'</p>':"")+
+      '<div class="card-actions"><button class="btn secondary small" type="button" data-history="'+i+'">Reabrir resultados</button></div></article>';
+  }).join("")+'</div>';
+}
+async function assistantSearch(){
+  const prompt=$("#assistantPrompt").value.trim(),button=$("#assistantSend"),label=$("#assistantReply");
+  if(prompt.length<5||prompt.length>450){label.textContent="Descreva seu pedido em até 450 caracteres.";return;}
+  if(state.mode!=="remote"||!state.user){label.textContent="Entre na conta Firebase e aguarde a sincronização antes de pesquisar.";return;}
+  if(!searchWorkerUrl){label.textContent="Worker de pesquisa ainda não configurado.";return;}
+  button.disabled=true;button.textContent="Interpretando...";
+  try{
+    const base="https://www.gstatic.com/firebasejs/11.10.0/";
+    const [sdkApp,sdkAuth]=await Promise.all([import(base+"firebase-app.js"),import(base+"firebase-auth.js")]);
+    const app=sdkApp.getApps().find(a=>a.options.projectId===firebaseConfig.projectId);
+    const user=app?sdkAuth.getAuth(app).currentUser:null;
+    if(!user)throw Error("Login Firebase necessário.");
+    const controller=new AbortController(),abort=setTimeout(()=>controller.abort(),35000);
+    let res;
+    try{
+      res=await fetch(new URL("/interpret",searchWorkerUrl),{
+        method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+await user.getIdToken()},
+        body:JSON.stringify({message:prompt}),signal:controller.signal,cache:"no-store"
+      });
+    }finally{clearTimeout(abort);}
+    const data=await res.json();
+    if(!res.ok)throw Error(String(data?.error||"IA indisponível"));
+    const f={...emptyFilters,...(data.filters||{})};
+    setForm($("#filterForm"),f);
+    state.filters=f;
+    await persist();
+    renderAll();
+    const missing=["brand","model","originCity","uf"].filter(k=>!String(f[k]||"").trim());
+    if(missing.length){
+      label.textContent="A IA identificou parte do pedido. Complete os filtros ausentes: "+missing.join(", ")+". Nenhuma consulta externa foi feita.";
+      $("#filterForm").scrollIntoView({behavior:"smooth",block:"start"});
+      return;
+    }
+    if(!validFilters(f)){label.textContent="Filtros interpretados, mas alguns valores precisam de correção. Nenhuma pesquisa foi feita.";return;}
+    label.textContent="Pedido interpretado. Pesquisando anúncios agora; os resultados serão registrados no Firebase.";
+    await automaticSearch({requestText:prompt});
+  }catch(e){
+    label.textContent="Interpretação não concluída: "+(e?.message||"erro")+". Os filtros manuais continuam disponíveis.";
+  }finally{button.disabled=false;button.textContent="Interpretar e pesquisar";}
+}
+function enableVoiceInput(){
+  const Rec=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!Rec)return;
+  const mic=$("#assistantMic");mic.hidden=false;
+  mic.addEventListener("click",()=>{
+    const recognizer=new Rec();recognizer.lang="pt-BR";recognizer.maxAlternatives=1;recognizer.interimResults=false;
+    mic.disabled=true;mic.textContent="Ouvindo...";
+    recognizer.onresult=e=>{$("#assistantPrompt").value=String(e.results?.[0]?.[0]?.transcript||"").slice(0,450);};
+    recognizer.onerror=e=>{$("#assistantReply").textContent="Ditado não concluído: "+(e?.error||"erro")+". Digite o pedido normalmente.";};
+    recognizer.onend=()=>{mic.disabled=false;mic.textContent="🎙 Ditar pedido";};
+    try{recognizer.start();}catch{mic.disabled=false;mic.textContent="🎙 Ditar pedido";}
+  });
+}
+
 function summarize(){const out={compatible:[],pending:[],outside:[]};for(const l of sortLeads(state.leads,state.filters.order)){const r=evaluateLead(l,state.filters);out[r.bucket].push({...l,assessment:r});}return out;}
 function renderCounts(groups){$("#statConfirmed").textContent=groups.compatible.length;$("#statPending").textContent=groups.pending.length;$("#statOutside").textContent=groups.outside.length;}
 function card(x,bucket){
@@ -153,7 +232,7 @@ function renderFinanceOptions(){
   el.innerHTML='<option value="">Sem anúncio selecionado</option>'+state.leads.map(x=>'<option value="'+esc(x.id)+'">'+esc([x.brand,x.model,x.version,x.yearModel||"",money(x.price)].filter(Boolean).join(" · "))+'</option>').join("");
   if(state.leads.some(x=>x.id===prev))el.value=prev;
 }
-function renderAll(){const groups=summarize();renderCounts(groups);renderLeads(groups);renderFinanceOptions();setStatus();}
+function renderAll(){const groups=summarize();renderCounts(groups);renderLeads(groups);renderFinanceOptions();renderHistory();setStatus();}
 function openLead(id){
   const form=$("#leadForm");form.reset();
   const x=state.leads.find(y=>y.id===id);
@@ -192,7 +271,7 @@ function download(name,content,mime){
   const blob=new Blob([content],{type:mime}),url=URL.createObjectURL(blob),a=document.createElement("a");
   a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500);
 }
-function backupJson(){download("evolution-radar-ia-backup-"+new Date().toISOString().slice(0,10)+".json",JSON.stringify({schemaVersion:1,exportedAt:new Date().toISOString(),leads:state.leads,filters:state.filters},null,2),"application/json");}
+function backupJson(){download("evolution-radar-ia-backup-"+new Date().toISOString().slice(0,10)+".json",JSON.stringify({schemaVersion:1,exportedAt:new Date().toISOString(),leads:state.leads,filters:state.filters,recentSearchHistory:state.history},null,2),"application/json");}
 async function importJson(e){
   if(state.mode==="loading"){notice("Aguarde sincronizar.");return;}
   const file=e.target.files?.[0];e.target.value="";if(!file)return;
@@ -218,7 +297,10 @@ function bind(){
   $$("[data-view]").forEach(b=>b.addEventListener("click",()=>switchView(b.dataset.view)));
   $("#themeToggle").addEventListener("click",theme);
   $("#filterForm").addEventListener("submit",async e=>{e.preventDefault();const f=readFilters();if(!validFilters(f))return;state.filters=f;await persist();renderAll();notice("Filtros aplicados ao histórico salvo.");});
-  $("#automaticSearchButton").addEventListener("click",automaticSearch);
+  $("#automaticSearchButton").addEventListener("click",()=>automaticSearch());
+  $("#assistantSend").addEventListener("click",assistantSearch);
+  $("#searchHistory").addEventListener("click",e=>{const btn=e.target.closest("button[data-history]");if(!btn)return;const entry=state.history[Number(btn.dataset.history)];if(!entry)return;const f={...emptyFilters,...(entry.filters||{})};setForm($("#filterForm"),f);displayDiscovery(normalizeWebLeads(entry.items),entry);$("#automaticResults").scrollIntoView({behavior:"smooth",block:"start"});});
+  enableVoiceInput();
   $("#automaticResults").addEventListener("click",e=>{const btn=e.target.closest("button[data-discovery]");if(btn)registerDiscovery(Number(btn.dataset.discovery));});
   $("#generateSearch").addEventListener("click",async()=>{const f=readFilters();if(!validFilters(f))return;state.filters=f;await persist();renderAll();updateSearch();$("#searchLinks").scrollIntoView({behavior:"smooth",block:"start"});});
   $("#resetFilters").addEventListener("click",async()=>{state.filters={...emptyFilters};setForm($("#filterForm"),state.filters);$("#searchLinks").hidden=true;await persist();renderAll();});
@@ -245,6 +327,7 @@ async function boot(){
     try{
       state.firebase=await openFirebase(firebaseConfig,{
         onAuth:user=>{state.user=user;if(user){state.mode="loading";state.remoteReady=false;}else{const l=localRead();state.leads=l.leads;state.filters=l.filters;setForm($("#filterForm"),state.filters);state.mode="local";state.remoteReady=false;}renderAll();},
+        onHistory:history=>{state.history=history;renderHistory();},
         onData:data=>{const raw=data?.leads;const leads=Array.isArray(raw)?raw:(raw&&typeof raw==="object"?Object.values(raw):[]);state.leads=leads.map(sanitizeLead).filter(Boolean);state.filters={...emptyFilters,...(data?.filters||{})};setForm($("#filterForm"),state.filters);state.mode="remote";state.remoteReady=true;renderAll();},
         onError:err=>{notice("Erro Firebase: "+err.message);state.mode="loading";renderAll();}
       });renderAll();
