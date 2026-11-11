@@ -27,6 +27,10 @@ function validFilters(f){
   if(f.yearFrom&&!isYear(f.yearFrom))return false;
   if(f.yearTo&&!isYear(f.yearTo))return false;
   if(f.yearFrom&&f.yearTo&&Number(f.yearFrom)>Number(f.yearTo))return false;
+  for(const name of ["priceMin","priceMax","kmMax","radiusKm"]){
+    if(f[name]!==""&&f[name]!==undefined&&f[name]!==null&&(!Number.isFinite(Number(f[name]))||Number(f[name])<0))return false;
+  }
+  if(f.priceMin&&f.priceMax&&Number(f.priceMin)>Number(f.priceMax))return false;
   return true;
 }
 async function authenticate(token,env){
@@ -58,7 +62,7 @@ function sources(results){
 // Pesquisa em duas fases: descobrir URLs; extrair somente anúncios individuais.
 // Dados incompletos sempre permanecem pendentes. Nenhum resultado equivale a compra aprovada.
 const searchMemory=new Map();
-function listingType(url){
+export function listingType(url){
   let u;try{u=new URL(url);}catch{return "unknown";}
   const path=u.pathname.replace(/\/+$/,"");
   if(/(^|\.)olx\.com\.br$/i.test(u.hostname))
@@ -90,7 +94,7 @@ function uniqueNumber(matches){
   const distinct=[...new Set(entries)];
   return distinct.length===1?distinct[0]:null;
 }
-function parseFacts(page,title,f){
+export function parseFacts(page,title,f){
   const t=String(page??"").slice(0,6500);
   const price=uniqueNumber([
     ...t.matchAll(/(?:pre[cç]o|valor(?:\s+total)?|à vista|a vista)\s*[:\n-]?\s*R\$\s*([\d.,]+)/gi),
@@ -113,7 +117,7 @@ function parseFacts(page,title,f){
     city:cityConfirmed?f.originCity:null,uf:cityConfirmed?f.uf:null
   };
 }
-function gradeListing(item,f){
+export function gradeListing(item,f){
   const found=item.fields||{},title=normalized(item.title),reject=[],pending=[];
   const contains=v=>title.includes(normalized(v));
   if(f.brand&&!contains(f.brand))pending.push("Marca não comprovada no título");
@@ -122,9 +126,9 @@ function gradeListing(item,f){
     if(/\b(fan|start|titan|cargo)\b/.test(title))reject.push("Versão aparentemente diferente");
     else pending.push("Versão não comprovada");
   }
-  const y=found.yearModel;
+  const y=f.yearType==="make"?found.yearMake:found.yearModel;
   if(f.yearFrom||f.yearTo){
-    if(y===null||y===undefined)pending.push("Ano-modelo não comprovado");
+    if(y===null||y===undefined)pending.push("Ano de "+(f.yearType==="make"?"fabricação":"modelo")+" não comprovado");
     else if((f.yearFrom&&y<Number(f.yearFrom))||(f.yearTo&&y>Number(f.yearTo)))reject.push("Ano fora da faixa");
   }
   if(f.priceMax){
@@ -146,13 +150,14 @@ function gradeListing(item,f){
   return {bucket:reject.length?"outside":pending.length?"pending":"prequalified",
     reasons:reject.length?reject:pending.length?pending:["Dados da página sugerem compatibilidade; confirmar vendedor, documentação e disponibilidade"]};
 }
-function searchPlan(f){
+export function searchPlan(f){
   const core=[text(f.brand),text(f.model),text(f.version)].filter(Boolean).join(" ");
   const city='"'+text(f.originCity).replace(/"/g,"")+'"';
   const years=[f.yearFrom,f.yearTo].filter(x=>isYear(x));
   const query1=[core,years[0]||"","site:sp.olx.com.br/autos-e-pecas/motos",city,text(f.uf)].join(" ");
   const query2=[core,years[1]||years[0]||"","site:webmotors.com.br/comprar",city,text(f.uf)].join(" ");
-  const query3=[core,years.join(" "),city,text(f.uf),"-Fan -Start moto venda"].join(" ");
+  const middle=years.length===2&&Number(years[1])-Number(years[0])<=8?String(Math.floor((Number(years[0])+Number(years[1]))/2)):(years[0]||"");
+  const query3=[core,middle,city,text(f.uf),"-Fan -Start moto venda"].join(" ");
   return [...new Set([query1,query2,query3].map(x=>x.slice(0,360)))];
 }
 async function tavilyCall(endpoint,body,env){
