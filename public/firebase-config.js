@@ -6,7 +6,7 @@
 export const firebaseConfig = {
   apiKey: "AIzaSyD5UHGwC_s70QC1UIw9liA2X-EdIwIIjGU",
   authDomain: "evolution-radar-ia.firebaseapp.com",
-  databaseURL: "https://evolution-radar-ia-default-rtdb.firebaseio.com/"
+  databaseURL: "https://evolution-radar-ia-default-rtdb.firebaseio.com/",
   projectId: "evolution-radar-ia",
   storageBucket: "evolution-radar-ia.firebasestorage.app",
   messagingSenderId: "156060920013",
