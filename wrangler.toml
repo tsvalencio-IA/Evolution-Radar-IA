@@ -1,5 +1,6 @@
 # Evolution Radar IA — Worker de pesquisa. GitHub Pages continua hospedando o site.
 # A implantação automatizada é configurada no painel Cloudflare > Worker > Settings > Builds.
+# Sincronização pós-conexão GitHub: comentário para acionar novo build sem alterar o comportamento do Worker.
 # Nenhuma API key ou UID particular fica neste arquivo.
 name = "evolution-radar-search"
 main = "worker/evolution-search-worker.js"
