@@ -52,7 +52,7 @@ function sources(results){
     for(const k of [...u.searchParams.keys()])if(/^(utm_|fbclid$|gclid$)/i.test(k))u.searchParams.delete(k);
     if(dedupe.has(u.href))return [];dedupe.add(u.href);
     return [{title:String(item.title??"").slice(0,160),url:u.href,content:String(item.content??"").slice(0,800)}];
-  }).slice(0,12);
+  }).slice(0,60);
 }
 
 // Pesquisa em duas fases: descobrir URLs; extrair somente anúncios individuais.
@@ -224,22 +224,17 @@ export default {
     let payload;
     try{if(Number(request.headers.get("Content-Length")||0)>4000)return response({error:"Requisição muito grande"},413);payload=await request.json();}catch{return response({error:"JSON inválido"},400);}
     if(!validFilters(payload?.filters))return response({error:"Informe marca, modelo, cidade e UF válidos"},400);
-    const query=queryFor(payload.filters);
-    let result;
+    // Limite de consumo: cada consulta faz até 3 buscas básicas e até 5 extrações básicas.
+    // Repetições no mesmo isolate dentro de 10 min usam cache após validar Firebase.
+    const f=payload.filters;
+    const cacheKey=JSON.stringify([f.brand,f.model,f.version,f.yearFrom,f.yearTo,f.priceMin,f.priceMax,f.kmMax,f.originCity,f.uf,f.radiusKm,f.sellerType]);
+    const entry=searchMemory.get(cacheKey);
+    if(entry&&Date.now()-entry.time<600000)return response({...entry.data,cache:true});
     try{
-      const controller=new AbortController(), timeout=setTimeout(()=>controller.abort(),18000);
-      try{
-        result=await fetch("https://api.tavily.com/search",{
-          method:"POST",
-          headers:{"Content-Type":"application/json","Authorization":"Bearer "+env.TAVILY_API_KEY},
-          body:JSON.stringify({query,search_depth:"basic",max_results:12,include_domains:ALLOWED_DOMAINS,include_answer:false,include_raw_content:false}),
-          signal:controller.signal
-        });
-      }finally{clearTimeout(timeout);}
-    }catch{return response({error:"Pesquisa externa indisponível; tente mais tarde"},502);}
-    if(!result.ok)return response({error:result.status===429?"Cota de pesquisa atingida":"Fonte de busca retornou erro",upstreamStatus:result.status},502);
-    let data;
-    try{data=await result.json();}catch{return response({error:"Resposta externa inválida"},502);}
-    return response({source:"Tavily",query,checkedAt:new Date().toISOString(),evidence:"index",items:sources(data.results)});
+      const data=await collect(f,env);
+      if(searchMemory.size>40)searchMemory.clear();
+      searchMemory.set(cacheKey,{time:Date.now(),data});
+      return response({...data,cache:false});
+    }catch(e){return response({error:"Consulta externa não concluída: "+text(e?.message||"erro",160)},502);}
   }
 };
