@@ -36,21 +36,46 @@ function updateSearch(){
 }
 function displayDiscovery(items,metadata){
   latestDiscovered=items;
-  const panel=$("#automaticResults");
-  if(!items.length){
-    panel.innerHTML='<div class="empty-state">A busca não retornou páginas indexadas das fontes consultadas. Isso não significa ausência de motos à venda.</div>';
-    return;
+  const panel=$("#automaticResults"),coverage=metadata.coverage||{};
+  const types=[
+    {key:"prequalified",title:"Compatibilidade preliminar",explain:"Dados extraídos indicam os critérios, mas ainda não comprovam anúncio ativo, documentação ou vendedor."},
+    {key:"pending",title:"Anúncios com verificação pendente",explain:"Algum critério não pôde ser comprovado na página individual."},
+    {key:"outside",title:"Anúncios com incompatibilidade identificada",explain:"Algum dado observado contraria os filtros solicitados."},
+    {key:"catalog",title:"Catálogos e páginas gerais",explain:"São páginas de busca, não motos individuais. Não entram na contagem de oportunidades."}
+  ];
+  const groups=Object.fromEntries(types.map(x=>[x.key,[]]));
+  for(const item of items){
+    const bucket=item.pageType==="catalog"?"catalog":item.assessment?.bucket||"pending";
+    (groups[bucket]||groups.pending).push(item);
   }
-  const individual=items.map((item,i)=>({...item,originalIndex:i})).filter(x=>x.pageType==="individual-candidate");
-  const catalogs=items.map((item,i)=>({...item,originalIndex:i})).filter(x=>x.pageType!=="individual-candidate");
-  const header='<p class="micro"><strong>'+individual.length+' link(s) com formato de anúncio individual</strong> · '+catalogs.length+' página(s) de catálogo/listagem · '+esc(metadata.source||"Buscador")+' · '+esc(metadata.checkedAt||"Data não informada")+'. Nenhum resultado foi verificado como anúncio ativo ou dentro dos filtros.</p>';
-  const group=(list,kind)=>'<div class="cards">'+list.map(x=>
-    '<article class="lead-card"><div class="card-top"><h3 class="card-title">'+esc(x.title)+'</h3><span class="chip pending">'+(kind==="individual"?"Link candidato":"Catálogo/listagem")+'</span></div><p class="card-note">'+esc(x.snippet||"Sem trecho da fonte")+'</p><p class="micro">'+esc(x.source)+' · Pesquisa indexada, não validada</p><div class="card-actions"><a class="btn secondary small" target="_blank" rel="noopener noreferrer" href="'+esc(x.url)+'">Abrir origem ↗</a>'+(kind==="individual"?'<button type="button" class="btn small" data-discovery="'+x.originalIndex+'">Investigar e registrar</button>':'')+'</div></article>').join("")+'</div>';
-  panel.innerHTML=header+
-    '<section><h3>Links candidatos a anúncios individuais ('+individual.length+')</h3>'+
-    (individual.length?group(individual,"individual"):'<div class="empty-state">Nenhum link individual identificado nesta pesquisa. Não há motos confirmadas; as páginas de catálogo abaixo podem servir para investigação manual.</div>')+'</section>'+
-    '<section><h3>Páginas de catálogo ('+catalogs.length+')</h3>'+
-    (catalogs.length?group(catalogs,"catalog"):'<div class="empty-state">Nenhuma página de catálogo.</div>')+'</section>';
+  const header='<p class="micro"><strong>Busca rastreável · '+items.length+' página(s) indexada(s)</strong>. '+
+    esc(metadata.source||"Buscador")+' · '+esc(metadata.checkedAt||"Sem data de consulta")+
+    '. Nenhuma oferta está aprovada para compra.</p>'+
+    '<div class="notice"><strong>Cobertura declarada:</strong> '+
+    esc(coverage.queriesSucceeded??"?")+' de '+esc(coverage.queriesAttempted??"?")+
+    ' consultas externas; '+esc(coverage.individualLinks??groups.prequalified.length+groups.pending.length+groups.outside.length)+
+    ' links de anúncios; '+esc(coverage.extractionSucceeded??0)+' extrações realizadas. '+
+    'O raio rodoviário e a disponibilidade não foram verificados automaticamente.</div>';
+  const card=(x)=>{
+    const f=x.fields||{},badge=x.pageType==="catalog"?"Catálogo":x.assessment?.bucket==="prequalified"?"Pré-qualificado":x.assessment?.bucket==="outside"?"Fora dos filtros":"Pendente";
+    const info=x.pageType==="catalog"?"Página de listagem":x.extractionStatus==="extracted"?"Dados extraídos da página (não confirmados pelo vendedor)":"Página individual não extraída";
+    const fields=x.extractionStatus==="extracted"?'<div class="card-meta">'+
+      '<span>Preço: <b>'+esc(money(f.price))+'</b></span>'+
+      '<span>KM: <b>'+esc(f.km===null?"Não comprovada":Number(f.km).toLocaleString("pt-BR"))+'</b></span>'+
+      '<span>Ano: <b>'+esc(f.yearMake===null&&f.yearModel===null?"Não comprovado":(f.yearMake??"?")+"/"+(f.yearModel??"?"))+'</b></span>'+
+      '<span>Cidade: <b>'+esc(f.city||"Não comprovada")+'</b></span></div>':'';
+    const reasons=x.assessment?.reasons?.length?'<p class="card-reason">'+esc(x.assessment.reasons.join(" · "))+'</p>':'';
+    const canRegister=x.pageType==="individual-candidate"&&x.assessment?.bucket!=="outside";
+    return '<article class="lead-card"><div class="card-top"><h3 class="card-title">'+esc(x.title)+'</h3><span class="chip '+(x.assessment?.bucket==="outside"?"outside":"pending")+'">'+esc(badge)+'</span></div>'+
+      '<p class="micro">'+esc(x.source)+' · '+esc(info)+'</p>'+fields+
+      '<p class="card-note">'+esc(x.snippet||"Sem resumo disponível")+'</p>'+reasons+
+      '<div class="card-actions"><a class="btn secondary small" target="_blank" rel="noopener noreferrer" href="'+esc(x.url)+'">Ver fonte original ↗</a>'+
+      (canRegister?'<button type="button" class="btn small" data-discovery="'+items.indexOf(x)+'">Investigar e registrar</button>':'')+'</div></article>';
+  };
+  panel.innerHTML=header+types.map(type=>
+    '<section><div class="group-head"><h2>'+type.title+'</h2><span>'+groups[type.key].length+'</span></div>'+
+    '<p class="micro">'+type.explain+'</p>'+
+    (groups[type.key].length?'<div class="cards">'+groups[type.key].map(card).join("")+'</div>':'<div class="empty-state">Nenhum resultado desta categoria nesta consulta.</div>')+'</section>').join("");
 }
 
 async function automaticSearch(){
@@ -78,7 +103,7 @@ async function automaticSearch(){
     const uri=new URL("/search",searchWorkerUrl);
     if(uri.protocol!=="https:")throw Error("Conector precisa usar HTTPS.");
     const controller=new AbortController();
-    const abort=setTimeout(()=>controller.abort(),25000);
+    const abort=setTimeout(()=>controller.abort(),55000);
     let res;
     try{
       res=await fetch(uri,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},body:JSON.stringify({filters:f}),signal:controller.signal,cache:"no-store"});
