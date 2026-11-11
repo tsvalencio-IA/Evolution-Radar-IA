@@ -1,11 +1,13 @@
 import {emptyFilters,numberOrNull,canonicalUrl,sanitizeLead,findDuplicate,evaluateLead,sortLeads,calculateScenario,sourceSearches,money,csvExport} from "./core.mjs";
 import {firebaseConfig} from "./firebase-config.js";
+import {searchWorkerUrl} from "./search-config.js";
+import {searchQuery,normalizeWebLeads} from "./search-engine.mjs";
 import {openFirebase} from "./firebase-client.js";
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const LOCAL="evolution-radar-ia-local-v1",THEME="evolution-radar-ia-theme";
 const state={filters:{...emptyFilters},leads:[],mode:"local",firebase:null,user:null,remoteReady:false};
 const labels={purchase:"compra",resale:"revenda",transport:"transporte",documents:"documentos",repairs:"reparos",labor:"mão de obra",taxes:"taxas",commissions:"comissões",other:"outros custos"};
-let toastTimer,saveQueue=Promise.resolve();
+let toastTimer,saveQueue=Promise.resolve(),latestDiscovered=[],lastDiscoveryFilters=null;
 const esc=x=>String(x??"").replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
 function notice(message){const t=$("#toast");t.textContent=message;t.hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.hidden=true,6500);}
 function localRead(){try{const a=JSON.parse(localStorage.getItem(LOCAL)||"{}");const leads=Array.isArray(a.leads)?a.leads.map(sanitizeLead).filter(Boolean):[];return {filters:{...emptyFilters,...a.filters},leads};}catch{return {filters:{...emptyFilters},leads:[]};}}
@@ -32,6 +34,72 @@ function updateSearch(){
   panel.hidden=false;
   panel.innerHTML='<div class="section-title"><h2>Abrir fontes externas</h2><span>Consultas, não anúncios individuais</span></div><p class="micro">Estas buscas abrem páginas externas; verifique cada anúncio e registre apenas informações comprovadas.</p><div class="source-links">'+links.map(x=>'<a href="'+esc(x.url)+'" target="_blank" rel="noopener noreferrer">'+esc(x.name)+' ↗</a>').join("")+'</div><p class="micro">Filtros de preço, KM e raio devem ser conferidos na fonte e novamente nos registros. O mecanismo de busca externo pode não aplicá-los.</p>';
 }
+function displayDiscovery(items,metadata){
+  latestDiscovered=items;
+  const panel=$("#automaticResults");
+  if(!items.length){
+    panel.innerHTML='<div class="empty-state">Nenhum resultado encontrado nessa consulta. Isso não comprova ausência de motos à venda. Tente outras palavras ou fontes.</div>';
+    return;
+  }
+  panel.innerHTML='<p class="micro"><strong>'+items.length+' resultado(s) de pesquisa indexada</strong> · '+esc(metadata.source||"Buscador")+' · '+esc(metadata.checkedAt||"Data não informada")+'. Não são anúncios confirmados nem compras aprovadas.</p><div class="cards">'+items.map((x,i)=>
+    '<article class="lead-card"><div class="card-top"><h3 class="card-title">'+esc(x.title)+'</h3><span class="chip pending">Não verificado</span></div><p class="card-note">'+esc(x.snippet||"Sem descrição disponibilizada pela fonte")+'</p><p class="micro">'+esc(x.source)+' · Dados indexados</p><div class="card-actions"><a class="btn secondary small" target="_blank" rel="noopener noreferrer" href="'+esc(x.url)+'">Abrir página de origem ↗</a><button type="button" class="btn small" data-discovery="'+i+'">Registrar como lead</button></div></article>').join("")+'</div>';
+}
+async function automaticSearch(){
+  const f=readFilters();
+  if(!validFilters(f))return;
+  if(!f.brand.trim()||!f.model.trim()||!f.originCity.trim()||!f.uf.trim()){
+    notice("Informe marca, modelo, cidade e UF para realizar a busca online.");
+    return;
+  }
+  if(!searchWorkerUrl){
+    $("#autoSearchState").textContent="Configuração gratuita pendente";
+    notice("O motor online está preparado, mas depende da configuração do Worker e de uma chave gratuita de pesquisa. Não há resultados simulados.");
+    return;
+  }
+  const button=$("#automaticSearchButton"),output=$("#automaticResults");
+  button.disabled=true;button.textContent="Pesquisando...";
+  output.innerHTML='<p class="micro">Consultando a web. Nenhum resultado será tratado como anúncio verificado sem inspeção individual.</p>';
+  try{
+    const base="https://www.gstatic.com/firebasejs/11.10.0/";
+    const [sdkApp,sdkAuth]=await Promise.all([import(base+"firebase-app.js"),import(base+"firebase-auth.js")]);
+    const firebaseApp=sdkApp.getApps().find(a=>a.options.projectId===firebaseConfig.projectId);
+    const user=firebaseApp?sdkAuth.getAuth(firebaseApp).currentUser:null;
+    if(!user)throw Error("Entre na conta Firebase antes de pesquisar.");
+    const token=await user.getIdToken();
+    const uri=new URL("/search",searchWorkerUrl);
+    if(uri.protocol!=="https:")throw Error("Conector precisa usar HTTPS.");
+    const controller=new AbortController();
+    const abort=setTimeout(()=>controller.abort(),25000);
+    let res;
+    try{
+      res=await fetch(uri,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},body:JSON.stringify({filters:f}),signal:controller.signal,cache:"no-store"});
+    }finally{clearTimeout(abort);}
+    const data=await res.json();
+    if(!res.ok)throw Error(String(data?.error||"Erro ao consultar o serviço de pesquisa"));
+    lastDiscoveryFilters=f;
+    const items=normalizeWebLeads(data?.items);
+    displayDiscovery(items,data);
+    $("#autoSearchState").textContent="Consulta realizada";
+  }catch(e){
+    latestDiscovered=[];
+    output.innerHTML='<div class="empty-state">'+esc(e?.message||"Pesquisa indisponível")+'</div>';
+    $("#autoSearchState").textContent="Consulta não concluída";
+  }finally{
+    button.disabled=false;button.textContent="Pesquisar motos agora";
+  }
+}
+function registerDiscovery(index){
+  const item=latestDiscovered[index];if(!item)return;
+  const f=lastDiscoveryFilters||state.filters;
+  openLead(null);
+  setForm($("#leadForm"),{
+    brand:f.brand||"",model:f.model||"",version:f.version||"",
+    city:"",uf:"",source:item.source,url:item.url,evidence:"index",
+    notes:"Pista encontrada em pesquisa indexada. NÃO verificada na página individual. Título: "+item.title+"\nTrecho: "+item.snippet+"\nVerificar modelo, versão, ano, KM, preço e cidade antes de classificar."
+  });
+  $("#leadDialog").scrollTop=0;
+}
+
 function summarize(){const out={compatible:[],pending:[],outside:[]};for(const l of sortLeads(state.leads,state.filters.order)){const r=evaluateLead(l,state.filters);out[r.bucket].push({...l,assessment:r});}return out;}
 function renderCounts(groups){$("#statConfirmed").textContent=groups.compatible.length;$("#statPending").textContent=groups.pending.length;$("#statOutside").textContent=groups.outside.length;}
 function card(x,bucket){
@@ -114,6 +182,8 @@ function bind(){
   $$("[data-view]").forEach(b=>b.addEventListener("click",()=>switchView(b.dataset.view)));
   $("#themeToggle").addEventListener("click",theme);
   $("#filterForm").addEventListener("submit",async e=>{e.preventDefault();const f=readFilters();if(!validFilters(f))return;state.filters=f;await persist();renderAll();notice("Filtros aplicados ao histórico salvo.");});
+  $("#automaticSearchButton").addEventListener("click",automaticSearch);
+  $("#automaticResults").addEventListener("click",e=>{const btn=e.target.closest("button[data-discovery]");if(btn)registerDiscovery(Number(btn.dataset.discovery));});
   $("#generateSearch").addEventListener("click",async()=>{const f=readFilters();if(!validFilters(f))return;state.filters=f;await persist();renderAll();updateSearch();$("#searchLinks").scrollIntoView({behavior:"smooth",block:"start"});});
   $("#resetFilters").addEventListener("click",async()=>{state.filters={...emptyFilters};setForm($("#filterForm"),state.filters);$("#searchLinks").hidden=true;await persist();renderAll();});
   ["openLead","addLead"].forEach(id=>$("#"+id).addEventListener("click",()=>openLead(null)));
@@ -133,6 +203,7 @@ async function boot(){
   const local=localRead();state.filters=local.filters;state.leads=local.leads;
   try{document.documentElement.dataset.theme=localStorage.getItem(THEME)==="light"?"light":"dark";}catch{}
   setForm($("#filterForm"),state.filters);bind();renderAll();
+  $("#autoSearchState").textContent=searchWorkerUrl?"Conector disponível":"Conector gratuito ainda não configurado";
   const configured=!!firebaseConfig?.apiKey&&!!firebaseConfig?.projectId&&!!firebaseConfig?.databaseURL;
   if(configured){
     try{
