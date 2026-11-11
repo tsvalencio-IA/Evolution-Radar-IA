@@ -23,6 +23,26 @@ export function marketplaceName(raw){
   for(const source of SOURCES)if(source.domains.some(x=>host===x||host.endsWith("."+x)))return source.name;
   return "";
 }
+// A busca indexa páginas. Este classificador distingue um endereço que parece
+// anúncio individual de uma página de catálogo; não verifica disponibilidade.
+export function classifySearchPage(url){
+  let u;
+  try{u=new URL(url);}catch{return "unknown";}
+  const source=marketplaceName(u.href);
+  const path=u.pathname.replace(/\/+$/,"");
+  if(source==="OLX"){
+    return /\/\d{9,}$/.test(path)&&path.includes("/autos-e-pecas/motos/")?"individual-candidate":"catalog";
+  }
+  if(source==="Webmotors"){
+    return /^\/comprar\/.+\/\d{5,}$/i.test(path)?"individual-candidate":"catalog";
+  }
+  if(source==="Mercado Livre"){
+    return /(?:^|[\/-])MLB-?\d{7,}(?:$|[\/?#])/i.test(path)?"individual-candidate":"catalog";
+  }
+  // Sem evidências de formato individual estável para esta origem.
+  return source?"catalog":"unknown";
+}
+
 export function normalizeWebLeads(raw){
   if(!Array.isArray(raw))return [];
   const seen=new Set();
@@ -34,6 +54,6 @@ export function normalizeWebLeads(raw){
     for(const key of [...canonical.searchParams.keys()])if(/^(utm_|fbclid$|gclid$)/i.test(key))canonical.searchParams.delete(key);
     const norm=canonical.toString();
     if(seen.has(norm))return []; seen.add(norm);
-    return [{title,url:norm,source,snippet:String(x.content??"").slice(0,750),observedAt:String(x.observedAt??"").slice(0,30),evidence:"index"}];
+    return [{title,url:norm,source,pageType:classifySearchPage(norm),snippet:String(x.content??"").slice(0,750),observedAt:String(x.observedAt??"").slice(0,30),evidence:"index"}];
   });
 }
