@@ -168,54 +168,68 @@ async function assistantSearch(){
   if(state.mode!=="remote"||!state.user){label.textContent="Entre na conta Firebase e aguarde a sincronização antes de pesquisar.";return;}
   if(!searchWorkerUrl){label.textContent="Worker de pesquisa ainda não configurado.";return;}
   button.disabled=true;button.textContent="Interpretando...";
-  let fallback=false;
+  let localMode=false;
   try{
-    let interpreted;
-    try{
-      const base="https://www.gstatic.com/firebasejs/11.10.0/";
-      const [sdkApp,sdkAuth]=await Promise.all([import(base+"firebase-app.js"),import(base+"firebase-auth.js")]);
-      const app=sdkApp.getApps().find(a=>a.options.projectId===firebaseConfig.projectId);
-      const user=app?sdkAuth.getAuth(app).currentUser:null;
-      if(!user)throw Error("Login Firebase necessário.");
-      const controller=new AbortController(),abort=setTimeout(()=>controller.abort(),35000);
-      let res;
-      try{
-        res=await fetch(new URL("/interpret",searchWorkerUrl),{
-          method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+await user.getIdToken()},
-          body:JSON.stringify({message:prompt}),signal:controller.signal,cache:"no-store"
-        });
-      }finally{clearTimeout(abort);}
-      const data=await res.json();
-      if(!res.ok)throw Error(String(data?.error||"IA indisponível"));
-      if(!data?.filters||typeof data.filters!=="object")throw Error("A IA não devolveu filtros válidos.");
-      interpreted=data.filters;
-    }catch(e){
-      fallback=true;
-      const local=parseLocalIntent(prompt);
-      if(local.warnings.length){label.textContent="O assistente remoto está indisponível. " + local.warnings.join(" ") + " Nenhuma pesquisa foi iniciada.";return;}
-      if(!local.filters.brand||!local.filters.model){label.textContent="O assistente remoto está indisponível e a interpretação local não reconheceu marca e modelo com segurança. Preencha os filtros manuais; nenhuma pesquisa foi iniciada.";return;}
-      interpreted=local.filters;
+    const saved=readFilters();
+    const local=parseLocalIntent(prompt,saved);
+    if(local.warnings.length){
+      label.textContent=local.warnings.join(" ")+" Confira o pedido e tente novamente; nenhuma pesquisa foi iniciada.";
+      return;
     }
-    if(!interpreted.brand||!interpreted.model){label.textContent="Pedido incompleto: informe marca e modelo exato antes de pesquisar. Nenhuma pesquisa foi iniciada.";return;}
-    const f=mergeIntentFilters(readFilters(),interpreted);
+    let interpreted=local.filters;
+    const completeLocal=!!(interpreted.brand&&interpreted.model);
+    if(completeLocal){
+      // Evita depender de /interpret quando o pedido já pode ser interpretado localmente.
+      // A busca de anúncios continua no endpoint autenticado /search.
+      localMode=true;
+    }else{
+      try{
+        const base="https://www.gstatic.com/firebasejs/11.10.0/";
+        const [sdkApp,sdkAuth]=await Promise.all([import(base+"firebase-app.js"),import(base+"firebase-auth.js")]);
+        const app=sdkApp.getApps().find(a=>a.options.projectId===firebaseConfig.projectId);
+        const user=app?sdkAuth.getAuth(app).currentUser:null;
+        if(!user)throw Error("Login Firebase necessário.");
+        const controller=new AbortController(),abort=setTimeout(()=>controller.abort(),12000);
+        let res;
+        try{
+          res=await fetch(new URL("/interpret",searchWorkerUrl),{
+            method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+await user.getIdToken()},
+            body:JSON.stringify({message:prompt}),signal:controller.signal,cache:"no-store"
+          });
+        }finally{clearTimeout(abort);}
+        const data=await res.json();
+        if(!res.ok)throw Error(String(data?.error||"IA indisponível"));
+        if(!data?.filters||typeof data.filters!=="object")throw Error("A IA não devolveu filtros válidos.");
+        interpreted=data.filters;
+      }catch(e){
+        label.textContent="O serviço de interpretação por IA não está publicado ou está indisponível. "+
+          "Este pedido não foi interpretado com segurança pelas regras locais. "+
+          "Preencha marca e modelo nos filtros manuais; nenhuma pesquisa foi iniciada.";
+        return;
+      }
+    }
+    if(!interpreted.brand||!interpreted.model){label.textContent="Informe marca e modelo exato. Nenhuma pesquisa foi iniciada.";return;}
+    const f=mergeIntentFilters(saved,interpreted);
     const missing=["brand","model","originCity","uf"].filter(k=>!String(f[k]||"").trim());
     if(missing.length){
-      label.textContent="Complete os campos obrigatórios: "+missing.join(", ")+". O sistema não inventa cidade ou modelo.";
+      label.textContent="Complete os campos: "+missing.join(", ")+". Os demais dados identificados foram colocados nos filtros.";
       setForm($("#filterForm"),f);
       $("#filterForm").scrollIntoView({behavior:"smooth",block:"start"});
       return;
     }
-    if(!validFilters(f)){label.textContent="Os filtros identificados precisam de correção. Nenhuma pesquisa foi feita.";return;}
+    if(!validFilters(f)){label.textContent="Os filtros precisam de correção. Nenhuma pesquisa foi feita.";return;}
     setForm($("#filterForm"),f);
     state.filters=f;
     await persist();
     renderAll();
-    label.textContent=fallback?"IA remota indisponível. Pedido interpretado por regras locais, sem inventar dados. Pesquisando anúncios...":"Pedido interpretado pela IA. Pesquisando anúncios...";
+    label.textContent=(localMode?"Interpretação local gratuita. ":"Interpretação por IA remota. ")+
+      "Buscando anúncios na web; não são resultados simulados...";
     await automaticSearch({requestText:prompt});
     const result=$("#autoSearchState").textContent;
-    label.textContent=(fallback?"Modo alternativo local (sem IA remota). ":"IA remota. ")+result+". Confira os resultados e os filtros; o sistema não confirma a disponibilidade das motos.";
+    label.textContent=(localMode?"Interpretação local gratuita. ":"IA remota. ")+result+
+      ". Confira os filtros e os links de origem: resultados indexados não comprovam disponibilidade.";
   }catch(e){
-    label.textContent="Não foi possível concluir a pesquisa: "+(e?.message||"erro")+". Verifique os filtros e tente novamente.";
+    label.textContent="Pesquisa não concluída: "+(e?.message||"erro")+". Os filtros manuais continuam disponíveis.";
   }finally{button.disabled=false;button.textContent="Interpretar e pesquisar";}
 }
 function enableVoiceInput(){
