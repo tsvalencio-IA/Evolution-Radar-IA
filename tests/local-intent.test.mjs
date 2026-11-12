@@ -22,3 +22,37 @@ test("permite intervalos e troca de versão sem manter versão anterior",()=>{
  const f=mergeIntentFilters({brand:"Yamaha",model:"125",version:"Factor",uf:"SP"},x.filters);
  assert.equal(f.version,"");assert.equal(f.yearFrom,"2022");assert.equal(f.yearTo,"2024");
 });
+
+test("fala completa em português preenche modelo, cidade, UF e preço",()=>{
+ const x=parseLocalIntent("Procure Yamaha Factor 125, ano 2012, até oito mil, em São José do Rio Preto");
+ assert.deepEqual(x.warnings,[]);
+ assert.deepEqual({brand:x.filters.brand,model:x.filters.model,version:x.filters.version,
+   yearFrom:x.filters.yearFrom,yearTo:x.filters.yearTo,priceMax:x.filters.priceMax,
+   originCity:x.filters.originCity,uf:x.filters.uf},{
+   brand:"Yamaha",model:"125",version:"Factor",yearFrom:"2012",yearTo:"2012",
+   priceMax:"8000",originCity:"São José do Rio Preto",uf:"SP"
+ });
+});
+test("consulta de particular com raio e capital inequívoca",()=>{
+ const x=parseLocalIntent("Honda CG 160 Fan 2022 até 18000 em Goiânia raio de 150 km particular");
+ assert.deepEqual(x.warnings,[]);
+ assert.equal(x.filters.brand,"Honda");
+ assert.equal(x.filters.model,"CG 160");
+ assert.equal(x.filters.version,"Fan");
+ assert.equal(x.filters.priceMax,"18000");
+ assert.equal(x.filters.originCity,"Goiânia");
+ assert.equal(x.filters.uf,"GO");
+ assert.equal(x.filters.radiusKm,"150");
+ assert.equal(x.filters.sellerType,"particular");
+});
+test("abreviação Rio Preto somente quando explicitamente em SP ou já selecionada",()=>{
+ const x=parseLocalIntent("Factor 125 2012 até R$ 8.000 em Rio Preto", {originCity:"São José do Rio Preto",uf:"SP"});
+ assert.equal(x.filters.originCity,"São José do Rio Preto");
+ assert.equal(x.filters.uf,"SP");
+ const unknown=parseLocalIntent("Factor 125 2012 em Rio Preto");
+ assert.equal(unknown.filters.originCity,undefined);
+});
+test("UF divergente de cidade reconhecida não é pesquisada silenciosamente",()=>{
+ const x=parseLocalIntent("CG 160 em Goiânia, estado SP");
+ assert.ok(x.warnings.some(w=>w.includes("não corresponde")));
+});
