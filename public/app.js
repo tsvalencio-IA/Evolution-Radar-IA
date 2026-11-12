@@ -142,6 +142,7 @@ function displayDiscovery(items,metadata){
 }
 
 async function automaticSearch({requestText=""}={}){
+  if(!canUse("search")){notice("Sua conta precisa ser aprovada e ter permissão de pesquisa.");return;}
   const f=readFilters();
   if(!validFilters(f))return;
   if(!f.brand.trim()||!f.model.trim()||!f.originCity.trim()||!f.uf.trim()){
@@ -179,7 +180,8 @@ async function automaticSearch({requestText=""}={}){
     $("#autoSearchState").textContent="Consulta realizada";
     try{
       if(!state.firebase||state.mode!=="remote")throw Error("Firebase não sincronizado");
-      await state.firebase.saveSearch({
+      if(!state.team)throw Error("Base compartilhada não conectada");
+      await state.team.saveSearch({
         requestText:String(requestText).slice(0,450),filters:f,source:data.source||"Tavily",
         checkedAt:data.checkedAt||new Date().toISOString(),coverage:data.coverage||{},
         items:(Array.isArray(data.items)?data.items:[]).slice(0,20)
@@ -225,6 +227,7 @@ function renderHistory(){
   }).join("")+'</div>';
 }
 async function assistantSearch(){
+  if(!canUse("search")){notice("Aguarde a aprovação do padrinho para consultar a IA.");return;}
   const prompt=$("#assistantPrompt").value.trim(),button=$("#assistantSend"),label=$("#assistantReply");
   if(prompt.length<5||prompt.length>450){label.textContent="Descreva seu pedido em até 450 caracteres.";return;}
   if(state.mode!=="remote"||!state.user){label.textContent="Entre na conta Firebase e aguarde a sincronização antes de pesquisar.";return;}
