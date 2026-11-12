@@ -44,3 +44,12 @@ test("exclusão seleciona múltiplos botões sem usar querySelector isolado",()=
  assert.ok(app.includes('data-team-action="delete"]'));
  assert.ok(app.includes(".filter(b=>b.dataset.uid===uid)"));
 });
+
+test("exclusão só é exibida com Worker 2026-11-12.4 e credencial confirmada",()=>{
+ assert.match(app,/accountDeletionConfigured===true/);
+ assert.match(app,/version==="2026-11-12\.4"/);
+ assert.match(app,/capabilities\.includes\("account-deletion"\)/);
+ assert.match(app,/state\.accountDeletionReady\?'<button class="btn small team-danger"/);
+ assert.match(app,/if\(!state\.accountDeletionReady\)return notice/);
+ assert.match(app,/void checkAccountDeletionService\(\)/);
+});
