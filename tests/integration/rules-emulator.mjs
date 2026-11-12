@@ -91,3 +91,16 @@ test("suspensão e revogação bloqueiam leitura sem alterar cadastros existente
   await assertSucceeds(set(ref(administrator,root+"/members/"+uid),member(perms,"revoked")));
   await assertFails(get(ref(applicant,root+"/searchHistory")));
 });
+
+test("exclusão de cadastro e vínculo pela conta administrativa preserva registros",async()=>{
+  await assertFails(remove(ref(applicant,root+"/members/"+uid)));
+  await assertFails(remove(ref(applicant,path)));
+  await assertSucceeds(remove(ref(administrator,root+"/members/"+uid)));
+  await assertSucceeds(remove(ref(administrator,path)));
+  await assertSucceeds(set(ref(administrator,root+"/adminAudit/delete-test-1"),{
+    action:"delete",actorUid:owner,targetUid:uid,at:serverTimestamp()
+  }));
+  assert.equal((await get(ref(administrator,root+"/members/"+uid))).exists(),false);
+  assert.equal((await get(ref(administrator,path))).exists(),false);
+  assert.equal((await get(ref(administrator,root+"/leads/lead-a"))).exists(),true);
+});
