@@ -361,7 +361,7 @@ async function interpretRequest(message,uid,env){
 export default {
   async fetch(request,env){
     if(request.method==="GET"&&new URL(request.url).pathname==="/health")
-      return response({service:"Evolution Radar IA",version:"2026-11-12.1",capabilities:["search","interpret"],status:"online",aiBinding:env.AI?.run?"connected":"missing",aiInference:"not-tested-by-health"});
+      return response({service:"Evolution Radar IA",version:"2026-11-12.3",capabilities:["search","interpret","municipal-radius"],radiusMethod:"approximate-municipal-centers",status:"online",aiBinding:env.AI?.run?"connected":"missing",aiInference:"not-tested-by-health"});
     if(request.method==="OPTIONS")return new Response(null,{status:204,headers:cors});
     const endpoint=new URL(request.url).pathname;
     if(!["/search","/interpret"].includes(endpoint)||request.method!=="POST")return response({error:"Endpoint inexistente"},404);
