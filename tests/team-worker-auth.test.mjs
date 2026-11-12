@@ -10,7 +10,7 @@ async function simulate(id,membership,fn){
  const prev=globalThis.fetch,calls=[];
  globalThis.fetch=async (url)=>{
   const u=String(url);calls.push(u);
-  if(u.includes("identitytoolkit.googleapis.com"))return Response.json({users:[{localId:id,disabled:false}]});
+  if(u.includes("identitytoolkit.googleapis.com"))return Response.json({users:[{localId:id,disabled:false,emailVerified:true}]});
   if(u.includes("/workspaces/evolution-motos/members/"))return Response.json(membership);
   throw Error("unexpected fetch "+u);
  };
