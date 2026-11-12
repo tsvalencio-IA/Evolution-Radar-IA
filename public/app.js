@@ -75,7 +75,7 @@ function renderTeamPanel(){
 }
 function localRead(){try{const a=JSON.parse(localStorage.getItem(LOCAL)||"{}");const leads=Array.isArray(a.leads)?a.leads.map(sanitizeLead).filter(Boolean):[];return {filters:{...emptyFilters,...a.filters},leads};}catch{return {filters:{...emptyFilters},leads:[]};}}
 function localSave(){try{localStorage.setItem(LOCAL,JSON.stringify({schemaVersion:1,filters:state.filters,leads:state.leads}));}catch{notice("Não foi possível gravar localmente. Exporte um backup antes de sair.");}}
-function setStatus(){const remote=state.mode==="remote",busy=state.mode==="loading";$("#dataStatus").textContent=remote?"Firebase conectado":busy?"Sincronizando...":"Dados locais";$("#storageDescription").textContent=remote?"Conectado ao Firebase: dados deste usuário armazenados no Realtime Database.":busy?"Carregando dados da conta Firebase; aguarde antes de editar.":"Dados guardados somente neste navegador. Sem sincronização com outros dispositivos. Use backup JSON regularmente.";$("#loginForm").hidden=!state.firebase||!!state.user;$("#logoutButton").hidden=!state.user;$("#firebaseStatus").textContent=state.firebase?(state.user?"Autenticado: "+state.user.email:"Firebase configurado. Faça login para consultar seus registros privados."):"Firebase não configurado. Edite public/firebase-config.js e habilite Authentication e Realtime Database; veja o README.";}
+function setStatus(){const remote=state.mode==="remote",busy=state.mode==="loading";$("#dataStatus").textContent=state.user&&!isApproved()?"Aguardando autorização":remote?"Firebase conectado":busy?"Sincronizando...":"Dados locais";$("#storageDescription").textContent=remote?"Conectado ao Firebase: dados deste usuário armazenados no Realtime Database.":busy?"Carregando dados da conta Firebase; aguarde antes de editar.":"Dados guardados somente neste navegador. Sem sincronização com outros dispositivos. Use backup JSON regularmente.";$("#loginForm").hidden=!state.firebase||!!state.user;$("#logoutButton").hidden=!state.user;$("#firebaseStatus").textContent=state.firebase?(state.user?"Autenticado: "+state.user.email:"Firebase configurado. Faça login para consultar seus registros privados."):"Firebase não configurado. Edite public/firebase-config.js e habilite Authentication e Realtime Database; veja o README.";}
 async function persist(){
   if(state.mode==="loading"){notice("Aguarde a leitura inicial dos dados remotos.");return;}
   if(state.mode!=="remote"){localSave();return;}
@@ -83,7 +83,7 @@ async function persist(){
   saveQueue=saveQueue.catch(()=>{}).then(()=>state.firebase.save(payload));
   try{await saveQueue;}catch(e){notice("Falha ao gravar no Firebase. Exporte backup JSON. "+(e?.message||""));}
 }
-function switchView(name){$$(".view").forEach(x=>x.classList.toggle("active",x.id==="view-"+name));$$("[data-view]").forEach(x=>{x.classList.toggle("active",x.dataset.view===name);x.setAttribute("aria-current",x.dataset.view===name?"page":"false")});location.hash=name;}
+function switchView(name){if(name==="admin"&&!isOwner())name="config";$$(".view").forEach(x=>x.classList.toggle("active",x.id==="view-"+name));$$("[data-view]").forEach(x=>{x.classList.toggle("active",x.dataset.view===name);x.setAttribute("aria-current",x.dataset.view===name?"page":"false")});location.hash=name;}
 function setForm(form,obj){for(const [k,v] of Object.entries(obj)){const el=form.elements.namedItem(k);if(!el)continue;if(el.type==="checkbox")el.checked=v===true;else el.value=v===null||v===undefined?"":String(v);}}
 function readFilters(){const f=Object.fromEntries(new FormData($("#filterForm")).entries());f.uf=String(f.uf||"").trim().toUpperCase();return {...emptyFilters,...f};}
 function validFilters(f){
@@ -213,7 +213,7 @@ function registerDiscovery(index){
 
 
 function renderHistory(){
-  const panel=$("#searchHistory"),entries=state.history;
+  const panel=$("#searchHistory"),entries=allHistory();
   if(!state.user){panel.innerHTML='<div class="empty-state">Entre no Firebase para recuperar suas pesquisas salvas.</div>';return;}
   if(!entries.length){panel.innerHTML='<div class="empty-state">Nenhuma pesquisa salva nesta conta.</div>';return;}
   panel.innerHTML='<div class="cards">'+entries.slice(0,50).map((x,i)=>{
@@ -314,7 +314,7 @@ function enableVoiceInput(){
   });
 }
 
-function summarize(){const out={compatible:[],pending:[],outside:[]};for(const l of sortLeads(state.leads,state.filters.order)){const r=evaluateLead(l,state.filters);out[r.bucket].push({...l,assessment:r});}return out;}
+function summarize(){const out={compatible:[],pending:[],outside:[]};for(const l of sortLeads(allLeads(),state.filters.order)){const r=evaluateLead(l,state.filters);out[r.bucket].push({...l,assessment:r});}return out;}
 function renderCounts(groups){$("#statConfirmed").textContent=groups.compatible.length;$("#statPending").textContent=groups.pending.length;$("#statOutside").textContent=groups.outside.length;}
 function card(x,bucket){
   const url=canonicalUrl(x.url);
@@ -328,18 +328,19 @@ function renderLeads(groups){
 }
 function renderFinanceOptions(){
   const el=$("#financeLead"),prev=el.value;
-  el.innerHTML='<option value="">Sem anúncio selecionado</option>'+state.leads.map(x=>'<option value="'+esc(x.id)+'">'+esc([x.brand,x.model,x.version,x.yearModel||"",money(x.price)].filter(Boolean).join(" · "))+'</option>').join("");
-  if(state.leads.some(x=>x.id===prev))el.value=prev;
+  el.innerHTML='<option value="">Sem anúncio selecionado</option>'+allLeads().map(x=>'<option value="'+esc(x.id)+'">'+esc([x.brand,x.model,x.version,x.yearModel||"",money(x.price)].filter(Boolean).join(" · "))+'</option>').join("");
+  if(allLeads().some(x=>x.id===prev))el.value=prev;
 }
-function renderAll(){const groups=summarize();renderCounts(groups);renderLeads(groups);renderFinanceOptions();renderHistory();setStatus();}
+function renderAll(){const groups=summarize();renderCounts(groups);renderLeads(groups);renderFinanceOptions();renderHistory();setStatus();renderTeamPanel();}
 function openLead(id){
+  if(state.user&&!canUse(id?"edit":"create"))return notice("O padrinho ainda não autorizou esta operação.");
   const form=$("#leadForm");form.reset();
-  const x=state.leads.find(y=>y.id===id);
+  const x=allLeads().find(y=>y.id===id);
   if(x){setForm(form,x);$("#leadDialogTitle").textContent="Editar evidência";}else{$("#leadDialogTitle").textContent="Registrar anúncio ou lead";setForm(form,{...state.filters,id:"",url:"",source:"",evidence:"index",price:"",km:"",city:state.filters.originCity,yearMake:"",yearModel:"",distanceKm:"",distanceVerified:false,notes:""});}
   $("#leadDialog").showModal();
 }
 function readLead(){
-  const form=$("#leadForm"),d=Object.fromEntries(new FormData(form).entries()),old=state.leads.find(x=>x.id===d.id);
+  const form=$("#leadForm"),d=Object.fromEntries(new FormData(form).entries()),old=allLeads().find(x=>x.id===d.id);
   for(const k of ["price","km","yearMake","yearModel","distanceKm"])d[k]=numberOrNull(d[k]);
   d.id=old?.id||crypto.randomUUID();
   d.distanceVerified=form.elements.namedItem("distanceVerified").checked;
@@ -370,7 +371,7 @@ function download(name,content,mime){
   const blob=new Blob([content],{type:mime}),url=URL.createObjectURL(blob),a=document.createElement("a");
   a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500);
 }
-function backupJson(){download("evolution-radar-ia-backup-"+new Date().toISOString().slice(0,10)+".json",JSON.stringify({schemaVersion:1,exportedAt:new Date().toISOString(),leads:state.leads,filters:state.filters,recentSearchHistory:state.history},null,2),"application/json");}
+function backupJson(){download("evolution-radar-ia-backup-"+new Date().toISOString().slice(0,10)+".json",JSON.stringify({schemaVersion:1,exportedAt:new Date().toISOString(),leads:allLeads(),filters:state.filters,recentSearchHistory:allHistory()},null,2),"application/json");}
 async function importJson(e){
   if(state.mode==="loading"){notice("Aguarde sincronizar.");return;}
   const file=e.target.files?.[0];e.target.value="";if(!file)return;
@@ -398,7 +399,7 @@ function bind(){
   $("#filterForm").addEventListener("submit",async e=>{e.preventDefault();const f=readFilters();if(!validFilters(f))return;state.filters=f;await persist();renderAll();notice("Filtros aplicados ao histórico salvo.");});
   $("#automaticSearchButton").addEventListener("click",()=>automaticSearch());
   $("#assistantSend").addEventListener("click",assistantSearch);
-  $("#searchHistory").addEventListener("click",e=>{const btn=e.target.closest("button[data-history]");if(!btn)return;const entry=state.history[Number(btn.dataset.history)];if(!entry)return;const f={...emptyFilters,...(entry.filters||{})};setForm($("#filterForm"),f);displayDiscovery(normalizeWebLeads(entry.items),entry);$("#automaticResults").scrollIntoView({behavior:"smooth",block:"start"});});
+  $("#searchHistory").addEventListener("click",e=>{const btn=e.target.closest("button[data-history]");if(!btn)return;const entry=allHistory()[Number(btn.dataset.history)];if(!entry)return;const f={...emptyFilters,...(entry.filters||{})};setForm($("#filterForm"),f);displayDiscovery(normalizeWebLeads(entry.items),entry);$("#automaticResults").scrollIntoView({behavior:"smooth",block:"start"});});
   enableVoiceInput();
   $("#automaticResults").addEventListener("click",e=>{const btn=e.target.closest("button[data-discovery]");if(btn)registerDiscovery(Number(btn.dataset.discovery));});
   $("#generateSearch").addEventListener("click",async()=>{const f=readFilters();if(!validFilters(f))return;state.filters=f;await persist();renderAll();updateSearch();$("#searchLinks").scrollIntoView({behavior:"smooth",block:"start"});});
@@ -408,10 +409,10 @@ function bind(){
   $("#cancelLead").addEventListener("click",()=>$("#leadDialog").close());
   $("#leadForm").addEventListener("submit",storeLead);
   $("#leadGroups").addEventListener("click",e=>{const b=e.target.closest("button[data-action]");if(!b)return;if(b.dataset.action==="edit")openLead(b.dataset.id);if(b.dataset.action==="delete")removeLead(b.dataset.id);});
-  $("#financeLead").addEventListener("change",e=>{const l=state.leads.find(x=>x.id===e.target.value);if(l&&l.price!=null)$("#financeForm").elements.namedItem("purchase").value=String(l.price);});
+  $("#financeLead").addEventListener("change",e=>{const l=allLeads().find(x=>x.id===e.target.value);if(l&&l.price!=null)$("#financeForm").elements.namedItem("purchase").value=String(l.price);});
   $("#financeForm").addEventListener("submit",calculate);
   $("#exportJson").addEventListener("click",backupJson);
-  $("#exportCsv").addEventListener("click",()=>download("evolution-radar-ia-"+new Date().toISOString().slice(0,10)+".csv",csvExport(state.leads),"text/csv;charset=utf-8"));
+  $("#exportCsv").addEventListener("click",()=>download("evolution-radar-ia-"+new Date().toISOString().slice(0,10)+".csv",csvExport(allLeads()),"text/csv;charset=utf-8"));
   $("#importJson").addEventListener("change",importJson);
   $("#loginForm").addEventListener("submit",async e=>{e.preventDefault();if(!state.firebase)return;const f=new FormData(e.target);try{await state.firebase.login(String(f.get("email")),String(f.get("password")));e.target.elements.namedItem("password").value="";notice("Autenticação realizada. Carregando dados privados.");}catch(err){notice("Login não realizado: "+err.message);}});
   $("#logoutButton").addEventListener("click",async()=>{if(!state.firebase)return;try{await state.firebase.logout();notice("Sessão encerrada.");}catch(err){notice(err.message);}});
