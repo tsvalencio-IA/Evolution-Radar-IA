@@ -31,3 +31,35 @@ test("IA autenticada extrai intenção e não aciona Tavily",async()=>{
     assert.equal(calls.length,1);assert.match(calls[0],/identitytoolkit/);
   }finally{globalThis.fetch=prev;}
 });
+
+
+test("GLM retorna formato JSON por choices e raciocínio desativado",async()=>{
+ const prev=globalThis.fetch;
+ globalThis.fetch=async()=>Response.json({users:[{localId:"test-user",disabled:false}]});
+ const ai={run:async(model,options)=>{
+   assert.equal(model,"@cf/zai-org/glm-4.7-flash");
+   assert.equal(options.chat_template_kwargs.enable_thinking,false);
+   assert.deepEqual(options.response_format,{type:"json_object"});
+   return {choices:[{message:{content:'{"brand":"Kawasaki","model":"Ninja 400","yearFrom":"2021","yearTo":"2021","priceMax":30000,"originCity":"São José do Rio Preto","uf":"SP"}'}}]};
+ }};
+ try{
+   const res=await worker.fetch(req("Procure Kawasaki Ninja 400 2021 até 30000 em São José do Rio Preto"),{...env,AI:ai});
+   assert.equal(res.status,200);
+   const body=await res.json();
+   assert.equal(body.mode,"workers-ai");
+   assert.equal(body.filters.brand,"Kawasaki");assert.equal(body.filters.model,"Ninja 400");
+   assert.equal(body.filters.priceMax,"30000");
+ }finally{globalThis.fetch=prev;}
+});
+test("IA com resposta vazia informa código preciso, sem vazar prompt",async()=>{
+ const prev=globalThis.fetch;
+ globalThis.fetch=async()=>Response.json({users:[{localId:"test-user",disabled:false}]});
+ const ai={run:async()=>({choices:[{message:{content:""}}]})};
+ try{
+   const res=await worker.fetch(req("Procure Kawasaki Ninja 300 2020"),{...env,AI:ai});
+   assert.equal(res.status,502);
+   const body=await res.json();
+   assert.equal(body.code,"AI_EMPTY_RESPONSE");
+   assert.equal(JSON.stringify(body).includes("Procure Kawasaki"),false);
+ }finally{globalThis.fetch=prev;}
+});
