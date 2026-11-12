@@ -90,3 +90,19 @@ test("pesquisa + extração com índice separado e sem revelar chave",async()=>{
   assert.equal(calls.filter(x=>x.endsWith("/extract")).length,1);
  }finally{globalThis.fetch=prev;}
 });
+
+test("consulta regional não restringe OLX a SP nem exclui Fan ou Start",()=>{
+ const q=searchPlan({...filters,brand:"Honda",model:"CG 125",version:"Fan",originCity:"Goiânia",uf:"GO",yearFrom:"2012",yearTo:"2024"});
+ assert.ok(q.some(x=>x.includes("site:olx.com.br")));
+ assert.equal(q.some(x=>x.includes("site:sp.olx.com.br")),false);
+ assert.equal(q.some(x=>x.includes("-Fan")||x.includes("-Start")),false);
+ assert.ok(q.some(x=>x.includes("2018")));
+});
+test("health comprova versão do Worker sem consumir Tavily ou dados do usuário",async()=>{
+ const res=await worker.fetch(new Request("https://evolution-radar-search.tsvalencio.workers.dev/health"),{});
+ assert.equal(res.status,200);
+ const payload=await res.json();
+ assert.equal(payload.service,"Evolution Radar IA");
+ assert.ok(payload.capabilities.includes("interpret"));
+ assert.equal(typeof payload.version,"string");
+});

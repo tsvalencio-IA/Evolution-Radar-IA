@@ -154,10 +154,10 @@ export function searchPlan(f){
   const core=[text(f.brand),text(f.model),text(f.version)].filter(Boolean).join(" ");
   const city='"'+text(f.originCity).replace(/"/g,"")+'"';
   const years=[f.yearFrom,f.yearTo].filter(x=>isYear(x));
-  const query1=[core,years[0]||"","site:sp.olx.com.br",city,text(f.uf)].join(" ");
+  const query1=[core,years[0]||"","site:olx.com.br",city,text(f.uf),"moto venda"].join(" ");
   const query2=[core,years[1]||years[0]||"","site:webmotors.com.br/comprar",city,text(f.uf)].join(" ");
-  const middle=years.length===2&&Number(years[1])-Number(years[0])<=8?String(Math.floor((Number(years[0])+Number(years[1]))/2)):(years[0]||"");
-  const query3=[core,middle,city,text(f.uf),"-Fan -Start moto venda"].join(" ");
+  const middle=years.length===2?String(Math.floor((Number(years[0])+Number(years[1]))/2)):(years[0]||"");
+  const query3=[core,middle,city,text(f.uf),"moto usada venda"].join(" ");
   return [...new Set([query1,query2,query3].map(x=>x.slice(0,360)))];
 }
 async function tavilyCall(endpoint,body,env){
@@ -286,6 +286,8 @@ async function interpretRequest(message,uid,env){
 
 export default {
   async fetch(request,env){
+    if(request.method==="GET"&&new URL(request.url).pathname==="/health")
+      return response({service:"Evolution Radar IA",version:"2026-11-11.2",capabilities:["search","interpret"],status:"online"});
     if(request.method==="OPTIONS")return new Response(null,{status:204,headers:cors});
     const endpoint=new URL(request.url).pathname;
     if(!["/search","/interpret"].includes(endpoint)||request.method!=="POST")return response({error:"Endpoint inexistente"},404);
