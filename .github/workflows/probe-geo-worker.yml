@@ -1,0 +1,18 @@
+name: Conferir Worker geografico em producao
+on:
+  push:
+    branches:
+      - diagnostico/versao-worker-geografico-20261112
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Ler health publico e conferir versao implantada
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS -L --max-time 20 https://evolution-radar-search.tsvalencio.workers.dev/health -o /tmp/health.json
+          cat /tmp/health.json
+          echo
+          node -e 'const fs=require("fs");const x=JSON.parse(fs.readFileSync("/tmp/health.json","utf8"));console.log("WORKER_VERSION="+x.version);console.log("RADIUS_CAPABILITY="+(x.capabilities||[]).includes("municipal-radius"));if(x.version!=="2026-11-12.3"||!x.capabilities?.includes("municipal-radius"))process.exit(2)'
