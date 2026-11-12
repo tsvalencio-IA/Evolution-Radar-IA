@@ -185,7 +185,7 @@ async function collect(f,env){
     // Uma quarta busca focada só é consumida quando as buscas iniciais devolvem catálogos.
     recovered=true;
     const q=[text(f.brand),text(f.model),text(f.version),text(f.yearFrom||""),text(f.originCity),
-      "site:sp.olx.com.br", "R$", "km", "venda"].filter(Boolean).join(" ").slice(0,360);
+      "site:olx.com.br", "R$", "km", "venda"].filter(Boolean).join(" ").slice(0,360);
     try{
       const next=await tavilyCall("search",{query:q,search_depth:"basic",max_results:15,
         include_domains:ALLOWED_DOMAINS,include_answer:false,include_raw_content:false},env);

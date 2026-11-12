@@ -106,3 +106,30 @@ test("health comprova versão do Worker sem consumir Tavily ou dados do usuário
  assert.ok(payload.capabilities.includes("interpret"));
  assert.equal(typeof payload.version,"string");
 });
+
+test("busca de recuperação não fica presa a SP quando região é GO",async()=>{
+ const inputs={...filters,brand:"Honda",model:"CG 125",version:"Fan",originCity:"Goiânia",uf:"GO",yearFrom:"2011",yearTo:"2012"};
+ const env={TAVILY_API_KEY:"SECRET_TEST",ALLOWED_UID:"test-user",FIREBASE_WEB_API_KEY:"PUBLIC_TEST"};
+ const req=new Request("https://evolution-radar-search.tsvalencio.workers.dev/search",{
+   method:"POST",headers:{Origin:"https://tsvalencio-ia.github.io",Authorization:"Bearer "+"x".repeat(140),"Content-Type":"application/json"},
+   body:JSON.stringify({filters:inputs})
+ });
+ const calls=[],prev=globalThis.fetch;
+ globalThis.fetch=async (url,options)=>{
+   const u=String(url);
+   if(u.includes("identitytoolkit.googleapis.com"))return Response.json({users:[{localId:"test-user",disabled:false}]});
+   if(u.endsWith("/search")){
+     calls.push(JSON.parse(options.body).query);
+     return Response.json({results:[{title:"Catálogo Honda CG 125",url:"https://www.olx.com.br/autos-e-pecas/motos",content:"Lista de motos"}]});
+   }
+   return Response.json({error:"unexpected"},{status:404});
+ };
+ try{
+   const res=await worker.fetch(req,env),body=await res.json();
+   assert.equal(res.status,200);
+   assert.equal(body.coverage.queriesAttempted,4);
+   assert.equal(calls.length,4);
+   assert.ok(calls[3].includes("site:olx.com.br"));
+   assert.ok(calls.every(q=>!q.includes("site:sp.olx.com.br")));
+ }finally{globalThis.fetch=prev;}
+});
