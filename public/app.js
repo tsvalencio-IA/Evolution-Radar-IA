@@ -21,7 +21,7 @@ function allLeads(){
   if(!isApproved())return [];
   const data=new Map();
   if(isOwner())for(const x of state.leads)data.set(x.id,{...x,_shared:false});
-  for(const raw of state.sharedLeads){const x=sanitizeLead(raw);if(x)data.set(x.id,{...x,_shared:true});}
+  for(const raw of state.sharedLeads){if(raw.archived===true){data.delete(raw.id);continue;}const x=sanitizeLead(raw);if(x)data.set(x.id,{...x,_shared:true});}
   return [...data.values()];
 }
 function allHistory(){
