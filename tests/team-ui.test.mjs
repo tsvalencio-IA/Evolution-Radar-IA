@@ -38,3 +38,9 @@ test("interface compacta evita justificativas repetitivas nos campos",()=>{
  assert.doesNotMatch(html,/O cadastro é gratuito, mas só permite pesquisar/);
  assert.doesNotMatch(html,/Limitações transparentes/);
 });
+
+test("exclusão seleciona múltiplos botões sem usar querySelector isolado",()=>{
+ assert.ok(app.includes("const buttons=$$('"));
+ assert.ok(app.includes('data-team-action="delete"]'));
+ assert.ok(app.includes(".filter(b=>b.dataset.uid===uid)"));
+});
