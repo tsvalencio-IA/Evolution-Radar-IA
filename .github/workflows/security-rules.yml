@@ -4,11 +4,17 @@ on:
     paths:
       - "database.rules.json"
       - "tests/integration/**"
+      - "public/team-*.js"
+      - "public/team-roles.mjs"
+      - "worker/evolution-search-worker.js"
       - ".github/workflows/security-rules.yml"
   pull_request:
     paths:
       - "database.rules.json"
       - "tests/integration/**"
+      - "public/team-*.js"
+      - "public/team-roles.mjs"
+      - "worker/evolution-search-worker.js"
       - ".github/workflows/security-rules.yml"
   workflow_dispatch:
 permissions:
