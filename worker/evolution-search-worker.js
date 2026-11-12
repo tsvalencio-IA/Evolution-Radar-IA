@@ -47,8 +47,24 @@ async function authenticate(token,env){
     String(env.ALLOWED_UID??"").trim(),
     ...String(env.ALLOWED_UIDS??"").split(/[,;\s]+/).map(x=>x.trim())
   ].filter(Boolean));
-  if(!u||u.disabled||!allowed.has(u.localId))return null;
-  return u.localId;
+  if(!u||u.disabled||!u.localId)return null;
+  // O administrador e a lista antiga permanecem compatíveis.
+  if(allowed.has(u.localId))return u.localId;
+  // Novos colaboradores são aprovados pelo padrinho no Firebase, não por
+  // alteração de variáveis Cloudflare a cada cadastro.
+  const memberUrl="https://evolution-radar-ia-default-rtdb.firebaseio.com/"+
+    "workspaces/evolution-motos/members/"+encodeURIComponent(u.localId)+
+    ".json?auth="+encodeURIComponent(token);
+  try{
+    const control=new AbortController(),timer=setTimeout(()=>control.abort(),6500);
+    let membership;
+    try{membership=await fetch(memberUrl,{signal:control.signal,cache:"no-store"});}
+    finally{clearTimeout(timer);}
+    if(!membership.ok)return null;
+    const m=await membership.json();
+    if(m?.status!=="approved"||m?.permissions?.search!==true)return null;
+    return u.localId;
+  }catch{return null;}
 }
 // Filtra páginas de outros setores ANTES de mostrar resultados e consumir extração.
 export function relevantMarketplacePage(item){
