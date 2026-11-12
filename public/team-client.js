@@ -2,7 +2,7 @@ import {workspaceConfig} from "./workspace-config.js";
 import {normalizePermissions,canAccess} from "./team-roles.mjs";
 import {signupRequest,requestAccess} from "./team-registration.js";
 import {manageMember,rejectRequest} from "./team-admin.js";
-import {saveSharedLead,archiveSharedLead,saveSharedSearch,copyLegacyLeads} from "./team-data.js";
+import {saveSharedLead,archiveSharedLead,saveSharedSearch,copyLegacyLeads,copyLegacyHistory} from "./team-data.js";
 const ROOT="workspaces/"+workspaceConfig.id;
 const URL="https://www.gstatic.com/firebasejs/11.10.0/";
 const full={view:true,search:true,create:true,edit:true,delete:true};
@@ -30,13 +30,15 @@ export async function openTeam(config,callbacks={}){
   }
   authAPI.onAuthStateChanged(auth,u=>{
     stop(listeners);stop(shared);user=u;member=null;request=null;
-    call("onLeads",[]);call("onHistory",[]);call("onRequests",[]);call("onMembers",[]);
+    call("onLeads",[]);call("onHistory",[]);call("onRequests",[]);call("onMembers",[]);call("onAudit",[]);
     status=u?"checking":"signed-out";emit();
     if(!u)return;
     if(owner()){
       status="approved";member={status,permissions:full};emit();
       sub(api.ref(db,"registrationRequests"),v=>call("onRequests",list(v).sort((a,b)=>Number(b.createdAt||0)-Number(a.createdAt||0))));
       sub(api.ref(db,ROOT+"/members"),v=>call("onMembers",list(v)));
+      sub(api.query(api.ref(db,ROOT+"/adminAudit"),api.orderByKey(),api.limitToLast(50)),
+        v=>call("onAudit",list(v).sort((a,b)=>Number(b.at||0)-Number(a.at||0))));
       sharedWatch();
     }else{
       sub(api.ref(db,"registrationRequests/"+u.uid),v=>{request=v;emit()});
@@ -56,6 +58,7 @@ export async function openTeam(config,callbacks={}){
     archiveLead:id=>archiveSharedLead({...ctx(),id}),
     saveSearch:record=>saveSharedSearch({...ctx(),record}),
     importLegacy:leads=>copyLegacyLeads({...ctx(),leads}),
+    importLegacyHistory:history=>copyLegacyHistory({...ctx(),history}),
     allowed,
     get status(){return status},
     get isOwner(){return owner()},
