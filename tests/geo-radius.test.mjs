@@ -7,7 +7,7 @@ import {evaluateLead} from "../public/core.mjs";
 
 const filters={brand:"Honda",model:"CG 125",version:"Titan",yearType:"model",yearFrom:"2022",yearTo:"2024",priceMin:"4000",priceMax:"15000",originCity:"São José do Rio Preto",uf:"SP",radiusKm:"50"};
 const near="Bady Bassitt",far="Sete Barras";
-const sample=(city,uf)=>"Honda CG 125 Titan 2023\\nPreço: R$ 10.500\\nKM: 18.000 km\\nAno 2023/2023\\nLocalização: "+city+" - "+uf;
+const sample=(city,uf)=>"Honda CG 125 Titan 2023\nPreço: R$ 10.500\nKM: 18.000 km\nAno 2023/2023\nLocalização: "+city+" - "+uf;
 test("base cobre sedes municipais verificáveis, acentos e UFs",()=>{
  const rio=resolveMunicipality("São José do Rio Preto","SP");
  assert.ok(rio);assert.equal(resolveMunicipality("Sao Jose do Rio Preto","sp").name,rio.name);
