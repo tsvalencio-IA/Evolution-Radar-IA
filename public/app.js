@@ -38,10 +38,12 @@ function renderTeamPanel(){
   const auth=!!state.user,owner=isOwner(),info=state.teamInfo;
   $("#signupForm").hidden=auth||!state.firebase;
   $("#requestApprovalForm").hidden=!auth||owner||!!info?.request||info?.status==="approved"||info?.status==="suspended"||info?.status==="revoked";
+  $("#verificationActions").hidden=!auth||owner||info?.emailVerified!==false;
   $("#adminNav").hidden=!owner;
   const warning=$("#accessNotice"),status=$("#accountStatus");
   const pending=auth&&!isApproved();
   const msg=!auth?"":info?.status==="checking"?"Verificando autorização do padrinho...":
+    info?.status==="email-unverified"||(!owner&&info?.emailVerified===false)?"Confirme seu e-mail pelo link recebido. Depois clique em Já confirmei meu e-mail. A aprovação do padrinho também é obrigatória.":
     info?.status==="suspended"?"Sua conta está suspensa. Entre em contato com o padrinho.":
     info?.status==="revoked"||info?.request?.status==="revoked"?"Seu acesso foi revogado pelo padrinho.":
     info?.request?.status==="rejected"?"Sua solicitação foi recusada pelo padrinho.":
@@ -467,10 +469,23 @@ function bind(){
     const form=e.target,button=form.querySelector("button[type=submit]"),data=new FormData(form);
     button.disabled=true;
     try{
-      await state.team.signup(String(data.get("name")),String(data.get("email")),String(data.get("password")));
+      const registered=await state.team.signup(String(data.get("name")),String(data.get("email")),String(data.get("password")));
       form.reset();
-      notice("Cadastro registrado. Entre com seu e-mail e senha em Configurações para acompanhar a aprovação.");
+      notice(registered.emailSent?"Cadastro registrado. Confira seu e-mail, depois faça login e aguarde aprovação.":"Cadastro registrado, mas o e-mail de confirmação não foi enviado. Faça login e use Reenviar confirmação.");
     }catch(err){notice("Cadastro: "+(err?.message||"erro"));}
+    finally{button.disabled=false;}
+  });
+  $("#resendVerification").addEventListener("click",async e=>{
+    if(!state.team)return;const button=e.currentTarget;button.disabled=true;
+    try{await state.team.resendVerification();notice("E-mail de confirmação solicitado. Verifique também a pasta de spam.");}
+    catch(err){notice("Confirmação não enviada: "+(err?.code||err?.message||"erro"));}
+    finally{button.disabled=false;}
+  });
+  $("#refreshVerification").addEventListener("click",async e=>{
+    if(!state.team)return;const button=e.currentTarget;button.disabled=true;
+    try{const verified=await state.team.refreshVerification();
+      notice(verified?"E-mail confirmado. Aguarde ou confira a aprovação do padrinho.":"E-mail ainda não confirmado. Abra o link de verificação e tente novamente.");}
+    catch(err){notice("Falha ao verificar: "+(err?.message||"erro"));}
     finally{button.disabled=false;}
   });
   $("#requestApprovalForm").addEventListener("submit",async e=>{
