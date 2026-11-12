@@ -12,7 +12,7 @@ const env=await initializeTestEnvironment({projectId:"demo-evolution-radar-team"
 after(async()=>env.cleanup());
 const owner={uid:workspaceConfig.ownerUid},user={uid:"team-member-1"};
 const ownerDb=env.authenticatedContext(owner.uid,{email:"owner@example.test"}).database();
-const memberDb=env.authenticatedContext(user.uid,{email:"member@example.test"}).database();
+const memberDb=env.authenticatedContext(user.uid,{email:"member@example.test",email_verified:true}).database();
 const root="workspaces/evolution-motos";
 const request={name:"Colaborador",email:"member@example.test",status:"pending",
   sponsorUid:owner.uid,createdAt:api.serverTimestamp()};
