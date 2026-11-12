@@ -55,3 +55,20 @@ export async function copyLegacyLeads({db,api,user,member,leads}){
   }
   return {copied,skipped};
 }
+
+export async function copyLegacyHistory({db,api,user,history}){
+  if(user?.uid!==workspaceConfig.ownerUid)throw Error("Somente o padrinho copia o histórico.");
+  if(!Array.isArray(history)||history.length>500)throw Error("Histórico inválido.");
+  let copied=0,skipped=0;
+  for(const entry of history){
+    const id=String(entry.id||"");
+    if(!/^[A-Za-z0-9_-]{3,128}$/.test(id))throw Error("ID antigo inválido; cópia interrompida.");
+    const ref=api.ref(db,ROOT+"/searchHistory/"+id);
+    if((await api.get(ref)).exists()){skipped++;continue;}
+    const {createdAt,createdBy,...rest}=entry;
+    await api.set(ref,{...rest,createdBy:user.uid,createdAt:api.serverTimestamp(),
+      originalCreatedAt:createdAt||null});
+    copied++;
+  }
+  return {copied,skipped};
+}
