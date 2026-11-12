@@ -4,13 +4,75 @@ import {searchWorkerUrl} from "./search-config.js";
 import {searchQuery,normalizeWebLeads} from "./search-engine.mjs";
 import {openFirebase} from "./firebase-client.js";
 import {parseLocalIntent,mergeIntentFilters} from "./local-intent.mjs";
+import {openTeam} from "./team-client.js";
+import {DEFAULT_PERMISSIONS,PERMISSION_NAMES} from "./team-roles.mjs";
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const LOCAL="evolution-radar-ia-local-v1",THEME="evolution-radar-ia-theme";
-const state={filters:{...emptyFilters},leads:[],history:[],mode:"local",firebase:null,user:null,remoteReady:false};
+const state={filters:{...emptyFilters},leads:[],history:[],mode:"local",firebase:null,user:null,remoteReady:false,team:null,teamInfo:null,sharedLeads:[],sharedHistory:[],requests:[],members:[]};
 const labels={purchase:"compra",resale:"revenda",transport:"transporte",documents:"documentos",repairs:"reparos",labor:"mão de obra",taxes:"taxas",commissions:"comissões",other:"outros custos"};
 let toastTimer,saveQueue=Promise.resolve(),latestDiscovered=[],lastDiscoveryFilters=null;
 const esc=x=>String(x??"").replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
 function notice(message){const t=$("#toast");t.textContent=message;t.hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.hidden=true,6500);}
+function isOwner(){return !!state.teamInfo?.isOwner}
+function isApproved(){return state.teamInfo?.status==="approved"}
+function canUse(action){return !!state.user&&isApproved()&&state.teamInfo?.permissions?.[action]===true}
+function allLeads(){
+  if(!state.user)return state.leads;
+  if(!isApproved())return [];
+  const data=new Map();
+  if(isOwner())for(const x of state.leads)data.set(x.id,{...x,_shared:false});
+  for(const raw of state.sharedLeads){const x=sanitizeLead(raw);if(x)data.set(x.id,{...x,_shared:true});}
+  return [...data.values()];
+}
+function allHistory(){
+  if(!isApproved())return [];
+  return [...(isOwner()?state.history:[]),...state.sharedHistory]
+    .sort((a,b)=>new Date(b.createdAt||b.checkedAt||0)-new Date(a.createdAt||a.checkedAt||0)).slice(0,50);
+}
+function permissionsEditor(perms,uid){
+  return '<div class="team-permissions">'+PERMISSION_NAMES.map(p=>
+    '<label><input type="checkbox" data-perm="'+p+'" '+(perms?.[p]===true?'checked':'')+'> '+
+    esc({view:"Visualizar",search:"Pesquisar",create:"Cadastrar",edit:"Editar",delete:"Arquivar"}[p])+'</label>').join("")+'</div>';
+}
+function renderTeamPanel(){
+  const auth=!!state.user,owner=isOwner(),info=state.teamInfo;
+  $("#signupForm").hidden=auth||!state.firebase;
+  $("#requestApprovalForm").hidden=!auth||owner||!!info?.request||info?.status==="approved"||info?.status==="suspended"||info?.status==="revoked";
+  $("#adminNav").hidden=!owner;
+  const warning=$("#accessNotice"),status=$("#accountStatus");
+  const pending=auth&&!isApproved();
+  const msg=!auth?"":info?.status==="checking"?"Verificando autorização do padrinho...":
+    info?.status==="suspended"?"Sua conta está suspensa. Entre em contato com o padrinho.":
+    info?.status==="revoked"||info?.request?.status==="revoked"?"Seu acesso foi revogado pelo padrinho.":
+    info?.request?.status==="rejected"?"Sua solicitação foi recusada pelo padrinho.":
+    info?.status==="pending"?"Seu cadastro está aguardando aprovação do padrinho. Nenhuma pesquisa ou base compartilhada está liberada.":"";
+  warning.hidden=!pending;warning.textContent=msg;
+  status.hidden=!pending;status.textContent=msg;
+  $("[data-view]").forEach(b=>{if(b.id!=="adminNav"&&b.dataset.view!=="config")b.hidden=pending;});
+  if(pending&&!$("#view-config").classList.contains("active"))switchView("config");
+  $("#teamSetupStatus").textContent=owner?
+    "A aprovação de colaboradores é protegida pelas regras do Realtime Database. Sem publicar as novas regras, os cadastros ainda não estarão operacionais.":
+    "Área exclusiva do padrinho.";
+  if(!owner)return;
+  const waiting=state.requests.filter(r=>r.status==="pending");
+  $("#adminRequests").innerHTML=waiting.length?waiting.map(r=>
+    '<article class="team-entry"><h3>'+esc(r.name||"Nome não informado")+'</h3>'+
+    '<div class="meta">E-mail: '+esc(r.email||"")+' · Solicitação: '+
+      esc(r.createdAt?new Date(r.createdAt).toLocaleString("pt-BR"):"Data não informada")+'</div>'+
+    '<div class="actions"><button class="btn primary small" data-uid="'+esc(r.id)+'" data-team-action="approve">Aprovar com permissões iniciais</button>'+
+    '<button class="btn secondary small" data-uid="'+esc(r.id)+'" data-team-action="reject">Recusar</button></div></article>').join(""):
+    '<p class="micro">Não há solicitações pendentes.</p>';
+  $("#adminMembers").innerHTML=state.members.length?state.members.map(m=>
+    '<article class="team-entry" data-member="'+esc(m.id)+'"><h3>'+esc(m.name||"Colaborador")+'</h3>'+
+    '<div class="meta">'+esc(m.email||"")+' · Estado: '+esc(m.status||"")+'</div>'+
+    permissionsEditor(m.permissions,m.id)+
+    '<div class="actions"><button class="btn secondary small" data-uid="'+esc(m.id)+'" data-team-action="permissions">Salvar permissões</button>'+
+    '<button class="btn secondary small" data-uid="'+esc(m.id)+'" data-team-action="rename">Editar nome</button>'+
+    (m.status==="approved"?'<button class="btn small" data-uid="'+esc(m.id)+'" data-team-action="suspend">Suspender</button>':
+      '<button class="btn small" data-uid="'+esc(m.id)+'" data-team-action="activate">Reativar</button>')+
+    '<button class="btn small" data-uid="'+esc(m.id)+'" data-team-action="revoke">Revogar acesso</button></div></article>').join(""):
+    '<p class="micro">Nenhum colaborador aprovado.</p>';
+}
 function localRead(){try{const a=JSON.parse(localStorage.getItem(LOCAL)||"{}");const leads=Array.isArray(a.leads)?a.leads.map(sanitizeLead).filter(Boolean):[];return {filters:{...emptyFilters,...a.filters},leads};}catch{return {filters:{...emptyFilters},leads:[]};}}
 function localSave(){try{localStorage.setItem(LOCAL,JSON.stringify({schemaVersion:1,filters:state.filters,leads:state.leads}));}catch{notice("Não foi possível gravar localmente. Exporte um backup antes de sair.");}}
 function setStatus(){const remote=state.mode==="remote",busy=state.mode==="loading";$("#dataStatus").textContent=remote?"Firebase conectado":busy?"Sincronizando...":"Dados locais";$("#storageDescription").textContent=remote?"Conectado ao Firebase: dados deste usuário armazenados no Realtime Database.":busy?"Carregando dados da conta Firebase; aguarde antes de editar.":"Dados guardados somente neste navegador. Sem sincronização com outros dispositivos. Use backup JSON regularmente.";$("#loginForm").hidden=!state.firebase||!!state.user;$("#logoutButton").hidden=!state.user;$("#firebaseStatus").textContent=state.firebase?(state.user?"Autenticado: "+state.user.email:"Firebase configurado. Faça login para consultar seus registros privados."):"Firebase não configurado. Edite public/firebase-config.js e habilite Authentication e Realtime Database; veja o README.";}
