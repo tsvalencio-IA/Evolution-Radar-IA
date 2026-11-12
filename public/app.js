@@ -1,7 +1,7 @@
 import {emptyFilters,numberOrNull,canonicalUrl,sanitizeLead,findDuplicate,evaluateLead,sortLeads,calculateScenario,sourceSearches,money,csvExport} from "./core.mjs";
 import {firebaseConfig} from "./firebase-config.js";
 import {searchWorkerUrl} from "./search-config.js";
-import {searchQuery,normalizeWebLeads} from "./search-engine.mjs";
+import {searchQuery,normalizeWebLeads,classifyDiscoveryForFilters} from "./search-engine.mjs";
 import {openFirebase} from "./firebase-client.js";
 import {parseLocalIntent,mergeIntentFilters} from "./local-intent.mjs";
 import {openTeam} from "./team-client.js";
@@ -108,46 +108,62 @@ function updateSearch(){
 }
 function displayDiscovery(items,metadata){
   latestDiscovered=items;
+  const filters=lastDiscoveryFilters||state.filters;
   const panel=$("#automaticResults"),coverage=metadata.coverage||{};
-  const types=[
-    {key:"prequalified",title:"Compatibilidade preliminar",explain:"Dados extraídos indicam os critérios, mas ainda não comprovam anúncio ativo, documentação ou vendedor."},
-    {key:"pending",title:"Anúncios com verificação pendente",explain:"Algum critério não pôde ser comprovado na página individual."},
-    {key:"outside",title:"Anúncios com incompatibilidade identificada",explain:"Algum dado observado contraria os filtros solicitados."},
-    {key:"catalog",title:"Catálogos e páginas gerais",explain:"São páginas de busca, não motos individuais. Não entram na contagem de oportunidades."}
-  ];
-  const groups=Object.fromEntries(types.map(x=>[x.key,[]]));
-  for(const item of items){
-    const bucket=item.pageType==="catalog"?"catalog":item.assessment?.bucket||"pending";
-    (groups[bucket]||groups.pending).push(item);
+  const evaluated=items.map(item=>({item,region:classifyDiscoveryForFilters(item,filters)}));
+  const visible=evaluated.filter(x=>x.region.category==="in-area"&&x.item.assessment?.bucket!=="outside");
+  const excluded=evaluated.filter(x=>!visible.includes(x));
+  const groups={prequalified:[],pending:[]};
+  for(const x of visible){
+    const bucket=x.item.assessment?.bucket==="prequalified"?"prequalified":"pending";
+    groups[bucket].push(x);
   }
-  const header='<p class="micro"><strong>Busca rastreável · '+items.length+' página(s) indexada(s)</strong>. '+
-    esc(metadata.source||"Buscador")+' · '+esc(metadata.checkedAt||"Sem data de consulta")+
-    '. Nenhuma oferta está aprovada para compra.</p>'+
-    '<div class="notice"><strong>Cobertura declarada:</strong> '+
-    esc(coverage.queriesSucceeded??"?")+' de '+esc(coverage.queriesAttempted??"?")+
-    ' consultas externas; '+esc(coverage.individualLinks??groups.prequalified.length+groups.pending.length+groups.outside.length)+
-    ' links de anúncios; '+esc(coverage.extractionSucceeded??0)+' extrações realizadas. '+
-    'O raio rodoviário e a disponibilidade não foram verificados automaticamente.</div>';
-  const card=(x)=>{
-    const f=x.fields||{},badge=x.pageType==="catalog"?"Catálogo":x.assessment?.bucket==="prequalified"?"Pré-qualificado":x.assessment?.bucket==="outside"?"Fora dos filtros":"Pendente";
-    const info=x.pageType==="catalog"?"Página de listagem":x.extractionStatus==="extracted"?"Dados extraídos da página (não confirmados pelo vendedor)":"Página individual não extraída";
-    const fields=x.extractionStatus==="extracted"?'<div class="card-meta">'+
-      '<span>Preço: <b>'+esc(money(f.price))+'</b></span>'+
-      '<span>KM: <b>'+esc(f.km===null?"Não comprovada":Number(f.km).toLocaleString("pt-BR"))+'</b></span>'+
-      '<span>Ano: <b>'+esc(f.yearMake===null&&f.yearModel===null?"Não comprovado":(f.yearMake??"?")+"/"+(f.yearModel??"?"))+'</b></span>'+
-      '<span>Cidade: <b>'+esc(f.city||"Não comprovada")+'</b></span></div>':'';
-    const reasons=x.assessment?.reasons?.length?'<p class="card-reason">'+esc(x.assessment.reasons.join(" · "))+'</p>':'';
-    const canRegister=x.pageType==="individual-candidate"&&x.assessment?.bucket!=="outside";
-    return '<article class="lead-card"><div class="card-top"><h3 class="card-title">'+esc(x.title)+'</h3><span class="chip '+(x.assessment?.bucket==="outside"?"outside":"pending")+'">'+esc(badge)+'</span></div>'+
-      '<p class="micro">'+esc(x.source)+' · '+esc(info)+'</p>'+fields+
-      '<p class="card-note">'+esc(String(x.snippet||"Sem resumo disponível").slice(0,x.pageType==="catalog"?210:450))+'</p>'+reasons+
-      '<div class="card-actions"><a class="btn secondary small" target="_blank" rel="noopener noreferrer" href="'+esc(x.url)+'">Ver fonte original ↗</a>'+
-      (canRegister?'<button type="button" class="btn small" data-discovery="'+items.indexOf(x)+'">Investigar e registrar</button>':'')+'</div></article>';
+  const maxRadius=Number(filters.radiusKm);
+  const regionText=Number.isFinite(maxRadius)&&maxRadius>0?
+    "Raio de "+esc(maxRadius)+" km (distância aproximada entre sedes municipais, em linha reta; não é rota rodoviária).":
+    "Somente o município de "+esc(filters.originCity)+".";
+  const header='<div class="notice"><strong>'+visible.length+' anúncio(s) individual(is) com município identificado dentro do filtro.</strong> '+
+    regionText+' Dados de localização não comprovados não são anunciados como compatíveis.</div>'+
+    '<p class="micro">'+esc(metadata.source||"Pesquisa")+' · '+esc(metadata.checkedAt||"Sem data")+
+    ' · '+esc(coverage.queriesSucceeded??"?")+' consulta(s) concluída(s). '+
+    'Disponibilidade, documentos e distância por estrada exigem confirmação.</p>';
+  const card=({item:x,region})=>{
+    const f=x.fields||{},badge=x.assessment?.bucket==="prequalified"?"Pré-qualificado":"Pendente";
+    const fieldValue=(value,format=value=>String(value))=>value===null||value===undefined?"Não comprovado":format(value);
+    const fields='<div class="card-meta">'+
+      '<span>Preço: <b>'+esc(f.price===null||f.price===undefined?"Não comprovado":money(f.price))+'</b></span>'+
+      '<span>KM: <b>'+esc(fieldValue(f.km,x=>Number(x).toLocaleString("pt-BR")))+'</b></span>'+
+      '<span>Ano: <b>'+esc(fieldValue(filters.yearType==="make"?f.yearMake:f.yearModel))+'</b></span>'+
+      '<span>Cidade: <b>'+esc(f.city||"Não comprovada")+'/'+esc(f.uf||"")+'</b></span>'+
+      '<span>Distância aprox.: <b>'+esc(region.distanceKm===null?"Não aferida":region.distanceKm.toFixed(1)+" km")+'</b></span></div>';
+    const reasons=x.assessment?.reasons?.length?'<p class="card-reason">'+esc(x.assessment.reasons.join(" · "))+'</p>':"";
+    return '<article class="lead-card"><div class="card-top"><h3 class="card-title">'+esc(x.title)+'</h3><span class="chip '+(badge==="Pré-qualificado"?"confirmed":"pending")+'">'+badge+'</span></div>'+
+      '<p class="micro">'+esc(x.source)+' · anúncio individual indexado</p>'+fields+
+      '<p class="card-note">'+esc(String(x.snippet||"").slice(0,450))+'</p>'+reasons+
+      '<div class="card-actions"><a class="btn secondary small" target="_blank" rel="noopener noreferrer" href="'+esc(x.url)+'">Ver fonte original</a>'+
+      '<button type="button" class="btn small" data-discovery="'+items.indexOf(x)+'">Investigar e registrar</button></div></article>';
   };
-  panel.innerHTML=header+types.map(type=>
-    '<section><div class="group-head"><h2>'+type.title+'</h2><span>'+groups[type.key].length+'</span></div>'+
-    '<p class="micro">'+type.explain+'</p>'+
-    (groups[type.key].length?'<div class="cards">'+groups[type.key].map(card).join("")+'</div>':'<div class="empty-state">Nenhum resultado desta categoria nesta consulta.</div>')+'</section>').join("");
+  const sections=[
+    ["prequalified","Compatibilidade preliminar"],
+    ["pending","Anúncios pendentes de comprovação"]
+  ].map(([key,title])=>
+    '<section><div class="group-head"><h2>'+title+'</h2><span>'+groups[key].length+'</span></div>'+
+    (groups[key].length?'<div class="cards">'+groups[key].map(card).join("")+'</div>':
+    '<div class="empty-state">Nenhum anúncio nesta categoria.</div>')+'</section>').join("");
+  const why={
+    catalog:"Catálogo geral — não é anúncio individual",
+    "out-of-area":"Fora do raio definido",
+    "location-unverified":"Cidade/UF não comprovadas",
+    "model-unverified":"Marca/modelo/versão não comprovados",
+    "outside-filters":"Fora dos critérios informados"
+  };
+  const suppressed=excluded.length?
+    '<details class="suppressed-evidence"><summary>Consultar '+excluded.length+' fonte(s) não qualificadas</summary>'+
+    '<div class="suppressed-list">'+excluded.map(({item:x,region})=>
+      '<div class="suppressed-entry"><strong>'+esc(x.title)+'</strong><span>'+esc(x.assessment?.bucket==="outside"?"Fora dos critérios":why[region.category]||"Informações não comprovadas")+
+      '</span><a target="_blank" rel="noopener noreferrer" href="'+esc(x.url)+'">Fonte original</a></div>').join("")+'</div></details>':"";
+  panel.innerHTML=header+(visible.length?sections:
+    '<div class="empty-state">Nenhuma oportunidade individual comprovou localização dentro do raio e os critérios mínimos. Os dados anteriores foram preservados.</div>')+suppressed;
 }
 
 async function automaticSearch({requestText=""}={}){
