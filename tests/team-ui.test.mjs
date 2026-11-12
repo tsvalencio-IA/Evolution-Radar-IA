@@ -25,3 +25,16 @@ test("cópia é confirmada e não apaga originais",()=>{
  assert.match(app,/confirm\("Copiar "\+state\.leads\.length/);
  assert.match(app,/importLegacyHistory/);
 });
+
+test("exclusão aparece para pendentes e aprovados e exige confirmação dupla",()=>{
+ assert.match(app,/data-team-action="delete"/);
+ assert.ok(app.includes("deleteTeamUser(uid)"));
+ assert.ok(app.includes('prompt('));
+ assert.ok(app.includes('EXCLUIR'));
+ assert.ok(app.includes('await state.team.deleteUser(uid,email)'));
+});
+test("interface compacta evita justificativas repetitivas nos campos",()=>{
+ assert.doesNotMatch(html,/O padrinho aprova cada novo cadastro e define permissões individuais/);
+ assert.doesNotMatch(html,/O cadastro é gratuito, mas só permite pesquisar/);
+ assert.doesNotMatch(html,/Limitações transparentes/);
+});
