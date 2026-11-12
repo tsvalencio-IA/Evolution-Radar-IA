@@ -16,7 +16,9 @@ export async function signupRequest(config,name,email,password){
       name:person,email:mail,status:"pending",sponsorUid:workspaceConfig.ownerUid,
       createdAt:db.serverTimestamp()
     });
-    return {created:true,pending:true};
+    let emailSent=true;
+    try{await auth.sendEmailVerification(user);}catch{emailSent=false;}
+    return {created:true,pending:true,emailSent};
   }catch(e){
     if(created)throw Error("Conta criada, mas a solicitação falhou. Entre nela e tente Solicitar aprovação. "+(e?.code||e?.message||""));
     throw e;
