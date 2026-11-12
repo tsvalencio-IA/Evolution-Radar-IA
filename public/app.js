@@ -51,7 +51,7 @@ function renderTeamPanel(){
   $("[data-view]").forEach(b=>{if(b.id!=="adminNav"&&b.dataset.view!=="config")b.hidden=pending;});
   if(pending&&!$("#view-config").classList.contains("active"))switchView("config");
   $("#teamSetupStatus").textContent=owner?
-    "A aprovação de colaboradores é protegida pelas regras do Realtime Database. Sem publicar as novas regras, os cadastros ainda não estarão operacionais.":
+    "O controle de acesso depende das regras do Firebase publicadas. Cadastro, aprovação e revogação são aplicados imediatamente quando a sincronização está ativa.":
     "Área exclusiva do padrinho.";
   if(!owner)return;
   const waiting=state.requests.filter(r=>r.status==="pending");
@@ -532,7 +532,19 @@ async function boot(){
         onHistory:history=>{state.history=history;renderHistory();},
         onData:data=>{const raw=data?.leads;const leads=Array.isArray(raw)?raw:(raw&&typeof raw==="object"?Object.values(raw):[]);state.leads=leads.map(sanitizeLead).filter(Boolean);state.filters={...emptyFilters,...(data?.filters||{})};setForm($("#filterForm"),state.filters);state.mode="remote";state.remoteReady=true;renderAll();},
         onError:err=>{notice("Erro Firebase: "+err.message);state.mode="loading";renderAll();}
-      });renderAll();
+      });
+      state.team=await openTeam(firebaseConfig,{
+        onAccess:info=>{state.teamInfo=info;renderAll();},
+        onRequests:list=>{state.requests=list;renderTeamPanel();},
+        onMembers:list=>{state.members=list;renderTeamPanel();},
+        onLeads:list=>{state.sharedLeads=list;renderAll();},
+        onHistory:list=>{state.sharedHistory=list;renderHistory();},
+        onError:err=>{
+          $("#teamSetupStatus").textContent="Regras do Firebase não permitiram a operação. Confira a publicação de database.rules.json. Detalhe: "+(err?.code||err?.message||"erro");
+          notice("Apadrinhamento: acesso negado pelo Firebase. Consulte a configuração das regras.");
+        }
+      });
+      renderAll();
     }catch(err){notice("Firebase indisponível: "+err.message);state.firebase=null;state.mode="local";renderAll();}
   }
   if("serviceWorker" in navigator && location.protocol==="https:")navigator.serviceWorker.register("./sw.js").catch(()=>{});
