@@ -114,9 +114,13 @@ export function parseLocalIntent(message, previousFilters = {}) {
 export function mergeIntentFilters(previous, interpreted) {
   const original = previous && typeof previous === "object" ? previous : {};
   const incoming = interpreted && typeof interpreted === "object" ? interpreted : {};
-  const result = {...original, ...incoming};
   const changedVehicle = (incoming.brand && norm(incoming.brand) !== norm(original.brand)) ||
     (incoming.model && norm(incoming.model) !== norm(original.model));
-  if (changedVehicle && !Object.hasOwn(incoming, "version")) result.version = "";
-  return result;
+  // Não transportar filtros de outra moto (ex.: Yamaha Factor → Kawasaki Ninja).
+  // Preservar apenas localização e preferências geográficas, sem inventar dados.
+  const base=changedVehicle?{
+    ...original,version:"",yearFrom:"",yearTo:"",priceMin:"",priceMax:"",
+    kmMax:"",sellerType:"all"
+  }:original;
+  return {...base,...incoming};
 }
