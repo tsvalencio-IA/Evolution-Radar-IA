@@ -29,4 +29,4 @@ jobs:
       - name: Instalar somente ferramentas de teste do emulador
         run: npm install --no-save --no-audit --no-fund firebase@11 @firebase/rules-unit-testing@4 firebase-tools@14
       - name: Validar autorização e isolamento no emulador local
-        run: npx firebase emulators:exec --only database --project demo-evolution-radar "node --test tests/integration/rules-emulator.mjs"
+        run: npx firebase emulators:exec --only database --project demo-evolution-radar "node --test --test-concurrency=1 tests/integration/*.mjs"
