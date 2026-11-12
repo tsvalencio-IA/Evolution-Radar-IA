@@ -1,4 +1,5 @@
 import {workspaceConfig} from "./workspace-config.js";
+import {searchWorkerUrl} from "./search-config.js";
 import {normalizePermissions,canAccess} from "./team-roles.mjs";
 import {signupRequest,requestAccess} from "./team-registration.js";
 import {manageMember,rejectRequest} from "./team-admin.js";
@@ -61,6 +62,19 @@ export async function openTeam(config,callbacks={}){
       emit();sharedWatch();return user.emailVerified===true;},
     adminAction:(uid,action,permissions,name)=>manageMember({...ctx(),uid,action,permissions,name}),
     reject:uid=>rejectRequest({...ctx(),uid}),
+    deleteUser:async(uid,email)=>{
+      if(!owner()||!auth.currentUser)throw Error("Somente o administrador pode excluir contas.");
+      if(uid===workspaceConfig.ownerUid)throw Error("A conta principal é protegida.");
+      if(!searchWorkerUrl)throw Error("Servidor de contas indisponível.");
+      const token=await auth.currentUser.getIdToken();
+      const res=await fetch(new URL("/admin/delete-user",searchWorkerUrl),{
+        method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},
+        body:JSON.stringify({uid,email,confirmation:"EXCLUIR"}),cache:"no-store"
+      });
+      const result=await res.json().catch(()=>({}));
+      if(result.deleted!==true)throw Error(result.error||result.code||"Exclusão não concluída.");
+      return result;
+    },
     saveLead:lead=>saveSharedLead({...ctx(),lead}),
     archiveLead:id=>archiveSharedLead({...ctx(),id}),
     saveSearch:record=>saveSharedSearch({...ctx(),record}),
