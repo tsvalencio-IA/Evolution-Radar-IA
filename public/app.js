@@ -8,7 +8,7 @@ import {openTeam} from "./team-client.js";
 import {DEFAULT_PERMISSIONS,PERMISSION_NAMES} from "./team-roles.mjs";
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const LOCAL="evolution-radar-ia-local-v1",THEME="evolution-radar-ia-theme";
-const state={filters:{...emptyFilters},leads:[],history:[],mode:"local",firebase:null,user:null,remoteReady:false,team:null,teamInfo:null,sharedLeads:[],sharedHistory:[],requests:[],members:[]};
+const state={filters:{...emptyFilters},leads:[],history:[],mode:"local",firebase:null,user:null,remoteReady:false,team:null,teamInfo:null,sharedLeads:[],sharedHistory:[],requests:[],members:[],audit:[]};
 const labels={purchase:"compra",resale:"revenda",transport:"transporte",documents:"documentos",repairs:"reparos",labor:"mão de obra",taxes:"taxas",commissions:"comissões",other:"outros custos"};
 let toastTimer,saveQueue=Promise.resolve(),latestDiscovered=[],lastDiscoveryFilters=null;
 const esc=x=>String(x??"").replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
@@ -72,6 +72,13 @@ function renderTeamPanel(){
       '<button class="btn small" data-uid="'+esc(m.id)+'" data-team-action="activate">Reativar</button>')+
     '<button class="btn small" data-uid="'+esc(m.id)+'" data-team-action="revoke">Revogar acesso</button></div></article>').join(""):
     '<p class="micro">Nenhum colaborador aprovado.</p>';
+  $("#adminAudit").innerHTML=state.audit.length?state.audit.slice(0,30).map(x=>
+    '<div class="team-entry"><span class="meta">'+
+    esc(x.at?new Date(x.at).toLocaleString("pt-BR"):"Data não informada")+' · '+
+    esc({approve:"Aprovou",reject:"Recusou",suspend:"Suspendeu",activate:"Reativou",
+      permissions:"Alterou permissões de",rename:"Renomeou",revoke:"Revogou"}[x.action]||x.action||"Ação")+
+    ' colaborador '+esc(x.targetUid||"")+'</span></div>').join(""):
+    '<p class="micro">Nenhuma decisão registrada nesta base.</p>';
 }
 function localRead(){try{const a=JSON.parse(localStorage.getItem(LOCAL)||"{}");const leads=Array.isArray(a.leads)?a.leads.map(sanitizeLead).filter(Boolean):[];return {filters:{...emptyFilters,...a.filters},leads};}catch{return {filters:{...emptyFilters},leads:[]};}}
 function localSave(){try{localStorage.setItem(LOCAL,JSON.stringify({schemaVersion:1,filters:state.filters,leads:state.leads}));}catch{notice("Não foi possível gravar localmente. Exporte um backup antes de sair.");}}
@@ -506,6 +513,18 @@ function bind(){
     catch(err){notice("Administração: "+(err?.message||"erro"));}
     finally{btn.disabled=false;}
   });
+  $("#copyLegacyHistory").addEventListener("click",async e=>{
+    if(!isOwner()||!state.team)return notice("Somente o padrinho pode executar a cópia.");
+    if(!state.history.length)return notice("Nenhuma pesquisa anterior precisa ser copiada.");
+    if(!confirm("Copiar "+state.history.length+" pesquisas antigas para a equipe, preservando todos os originais?"))return;
+    e.currentTarget.disabled=true;
+    try{
+      const r=await state.team.importLegacyHistory(state.history);
+      $("#teamCopyStatus").textContent=r.copied+" pesquisas copiadas, "+r.skipped+" já existentes. Histórico original preservado.";
+      notice("Cópia do histórico concluída.");
+    }catch(err){notice("Cópia do histórico interrompida: "+(err?.message||"erro"));}
+    finally{e.currentTarget.disabled=false;}
+  });
   $("#copyLegacyLeads").addEventListener("click",async e=>{
     if(!isOwner()||!state.team)return notice("Somente o padrinho pode executar a cópia.");
     if(!state.leads.length)return notice("Nenhum registro antigo precisa ser copiado.");
@@ -537,6 +556,7 @@ async function boot(){
         onAccess:info=>{state.teamInfo=info;renderAll();},
         onRequests:list=>{state.requests=list;renderTeamPanel();},
         onMembers:list=>{state.members=list;renderTeamPanel();},
+        onAudit:list=>{state.audit=list;renderTeamPanel();},
         onLeads:list=>{state.sharedLeads=list;renderAll();},
         onHistory:list=>{state.sharedHistory=list;renderHistory();},
         onError:err=>{
