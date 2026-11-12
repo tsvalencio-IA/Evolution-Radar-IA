@@ -44,6 +44,20 @@ async function authenticate(token,env){
   if(!u||u.disabled||u.localId!==env.ALLOWED_UID)return null;
   return u.localId;
 }
+// Filtra páginas de outros setores ANTES de mostrar resultados e consumir extração.
+export function relevantMarketplacePage(item){
+  if(!item || typeof item!=="object")return false;
+  let u;try{u=new URL(String(item.url??""));}catch{return false;}
+  if(u.protocol!=="https:" || !SOURCE_HOST_RE.test(u.hostname))return false;
+  const path=normalized(decodeURIComponent(u.pathname));
+  // Categorias incompatíveis com motocicletas. Não confundir anúncio de moto com catálogo genérico.
+  if(/(?:^|\/)(?:imoveis|apartamentos?|casas?|celulares?|smartphones?|eletronicos|informatica|moda|roupas?|moveis|eletrodomesticos|terrenos?|carros|automoveis)(?:\/|$)/.test(path))return false;
+  if(listingType(u.href)==="individual-candidate")return true;
+  const title=normalized(item.title);
+  const motorcycleTitle=/(?:^|\W)(?:moto|motos|motocicleta|motocicletas|honda|yamaha|suzuki|kawasaki|bajaj|dafra|shineray|triumph|bmw|factor|ninja|titan|fan|biz|fazer|ybr|cg)(?:$|\W)/.test(title);
+  const motorcyclePath=/(?:^|\/)(?:motos?|motocicletas?)(?:\/|$)/.test(path);
+  return motorcycleTitle||motorcyclePath;
+}
 function sources(results){
   if(!Array.isArray(results))return [];
   const dedupe=new Set();
@@ -52,6 +66,7 @@ function sources(results){
     let u;
     try{u=new URL(String(item.url??""));}catch{return [];}
     if(u.protocol!=="https:"||!SOURCE_HOST_RE.test(u.hostname))return [];
+    if(!relevantMarketplacePage({url:u.href,title:item.title}))return [];
     u.hash="";
     for(const k of [...u.searchParams.keys()])if(/^(utm_|fbclid$|gclid$)/i.test(k))u.searchParams.delete(k);
     if(dedupe.has(u.href))return [];dedupe.add(u.href);
@@ -215,7 +230,7 @@ async function collect(f,env){
   });
   const priority={prequalified:0,pending:1,outside:2};
   individual.sort((a,b)=>(priority[a.assessment.bucket]??8)-(priority[b.assessment.bucket]??8));
-  const catalogs=listed.filter(x=>x.pageType==="catalog").map(x=>({...x,
+  const catalogs=listed.filter(x=>x.pageType==="catalog").slice(0,5).map(x=>({...x,
     assessment:{bucket:"catalog",reasons:["Página de resultados; nenhuma moto individual confirmada"]}}));
   return {source:"Tavily",query:plan[0],queries:plan,checkedAt:new Date().toISOString(),evidence:"index",
     items:[...individual,...catalogs].slice(0,20),coverage:{
@@ -252,9 +267,12 @@ export function safeIntent(raw){
   }
   return out;
 }
-function intentText(result){
-  const value=result?.response??result?.choices?.[0]?.message?.content??result?.result?.response;
-  return typeof value==="string"?value:Array.isArray(value)?value.map(x=>x?.text||"").join(""):"";
+export function intentText(result){
+  const value=result?.choices?.[0]?.message?.content??result?.response??result?.result?.response;
+  if(typeof value==="string")return value;
+  if(Array.isArray(value))return value.map(x=>typeof x==="string"?x:String(x?.text??"")).join("");
+  if(value&&typeof value==="object"&&!Array.isArray(value))return JSON.stringify(value);
+  return "";
 }
 async function interpretRequest(message,uid,env){
   if(!env.AI?.run)return response({error:"Workers AI ainda não foi vinculado ao Worker publicado."},503);
@@ -269,25 +287,47 @@ async function interpretRequest(message,uid,env){
         {role:"system",content:"Você extrai exclusivamente filtros de pesquisa de motos usadas de um pedido em português brasileiro. Responda APENAS com um objeto JSON válido sem markdown, sem texto adicional, com as chaves opcionais: brand, model, version, yearType (model ou make), yearFrom, yearTo, priceMin, priceMax, kmMax, originCity, uf, radiusKm, sellerType (all, particular, loja). Nunca invente filtros ausentes. Se o pedido citar um único ano, use yearFrom e yearTo iguais. Dinheiro em reais como número simples (ex: oito mil = 8000). Cidade e UF apenas se explicitamente fornecidas ou inequivocamente identificáveis pelo nome geográfico. Se estiver ambíguo, omita o campo."},
         {role:"user",content:prompt}
       ],
-      max_completion_tokens:400,temperature:0,stream:false
+      // A GLM usa raciocínio por padrão. Desativá-lo evita consumir o limite
+      // de saída com pensamento oculto, deixando apenas o JSON solicitado.
+      chat_template_kwargs:{enable_thinking:false},
+      response_format:{type:"json_object"},
+      max_completion_tokens:650,temperature:0,stream:false
     });
     const raw=intentText(model),start=raw.indexOf("{"),end=raw.lastIndexOf("}");
-    if(start<0||end<=start)throw Error("Resposta sem filtros estruturados");
-    const filters=safeIntent(JSON.parse(raw.slice(start,end+1)));
-    if(!filters.brand&&!filters.model&&!filters.version)throw Error("Marca e modelo não reconhecidos");
+    if(start<0||end<=start)throw Error("AI_EMPTY_RESPONSE");
+    let parsed;
+    try{parsed=JSON.parse(raw.slice(start,end+1));}catch{throw Error("AI_INVALID_JSON");}
+    const filters=safeIntent(parsed);
+    if(!filters.brand||!filters.model)throw Error("AI_INCOMPLETE_FILTERS");
     const data={filters,mode:"workers-ai",model:"glm-4.7-flash",notice:"Filtros interpretados por IA; confira os campos antes de considerar qualquer anúncio."};
     if(intentCache.size>30)intentCache.clear();
     intentCache.set(cacheKey,{time:Date.now(),data});
     return response({...data,cache:false});
   }catch(e){
-    return response({error:"IA não concluiu a interpretação. Use os filtros manuais enquanto isso.",detail:String(e?.message||"erro").slice(0,120)},502);
+    // Resposta padronizada: nenhuma credencial, texto do usuário ou resposta bruta
+    // do modelo é exposta. O código distingue erro do modelo de erro de formato.
+    const rawCode=String(e?.message||"");
+    const code=rawCode==="AI_EMPTY_RESPONSE"?"AI_EMPTY_RESPONSE":
+      rawCode==="AI_INVALID_JSON"?"AI_INVALID_JSON":
+      rawCode==="AI_INCOMPLETE_FILTERS"?"AI_INCOMPLETE_FILTERS":
+      /quota|rate limit|429|capacity|3040/i.test(rawCode)?"AI_CAPACITY_LIMIT":
+      "AI_INFERENCE_FAILED";
+    const reason={
+      AI_EMPTY_RESPONSE:"O modelo respondeu sem texto utilizável.",
+      AI_INVALID_JSON:"O modelo retornou uma resposta que não é JSON válido.",
+      AI_INCOMPLETE_FILTERS:"A IA não conseguiu identificar com segurança a marca e o modelo.",
+      AI_CAPACITY_LIMIT:"O serviço gratuito de IA atingiu um limite ou está sem capacidade.",
+      AI_INFERENCE_FAILED:"Falha de inferência da Cloudflare. Consulte o log do Worker se persistir."
+    }[code];
+    console.error("Evolution Radar /interpret:",code,rawCode.slice(0,180));
+    return response({error:"Interpretação pela IA não concluída.",code,detail:reason},code==="AI_CAPACITY_LIMIT"?503:502);
   }
 }
 
 export default {
   async fetch(request,env){
     if(request.method==="GET"&&new URL(request.url).pathname==="/health")
-      return response({service:"Evolution Radar IA",version:"2026-11-11.2",capabilities:["search","interpret"],status:"online"});
+      return response({service:"Evolution Radar IA",version:"2026-11-12.1",capabilities:["search","interpret"],status:"online",aiBinding:env.AI?.run?"connected":"missing",aiInference:"not-tested-by-health"});
     if(request.method==="OPTIONS")return new Response(null,{status:204,headers:cors});
     const endpoint=new URL(request.url).pathname;
     if(!["/search","/interpret"].includes(endpoint)||request.method!=="POST")return response({error:"Endpoint inexistente"},404);

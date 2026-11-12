@@ -33,3 +33,23 @@ test("URLs desconhecidas não são declaradas individuais",()=>{
   assert.equal(classifySearchPage("https://napista.com.br/motos"),"catalog");
   assert.equal(classifySearchPage("https://example.com/moto"),"unknown");
 });
+
+
+test("não mostra casas, apartamentos, celulares ou catálogo OLX genérico como motos",()=>{
+ const results=normalizeWebLeads([
+   {title:"Casas à venda - São José do Rio Preto - SP | OLX",url:"https://sp.olx.com.br/regiao-de-sao-jose-do-rio-preto/imoveis/casas"},
+   {title:"Celulares MOTOROLA usados em Rio Preto",url:"https://sp.olx.com.br/regiao-de-sao-jose-do-rio-preto/celulares"},
+   {title:"Compre e venda perto de você | OLX",url:"https://www.olx.com.br/"},
+   {title:"Motos Yamaha Factor 125 E no Brasil",url:"https://www.olx.com.br/autos-e-pecas/motos/yamaha"},
+   {title:"Honda CG 160 Titan 2022",url:"https://sp.olx.com.br/regiao-de-sao-jose-do-rio-preto/autos-e-pecas/motos/honda-cg-160-titan-2022-1497739355"}
+ ]);
+ assert.equal(results.length,2);
+ assert.ok(results.every(r=>/Motos|Honda/.test(r.title)));
+});
+test("limita catálogos relevantes a cinco sem descartar anúncios individuais",()=>{
+ const raw=Array.from({length:20},(_,i)=>({title:"Motos Yamaha usadas catálogo "+i,url:"https://www.olx.com.br/autos-e-pecas/motos/yamaha?page="+i}));
+ raw.push({title:"Yamaha Factor individual",url:"https://sp.olx.com.br/autos-e-pecas/motos/yamaha-factor-125-1497739355"});
+ const items=normalizeWebLeads(raw);
+ assert.equal(items.filter(x=>x.pageType==="catalog").length,5);
+ assert.equal(items.filter(x=>x.pageType==="individual-candidate").length,1);
+});

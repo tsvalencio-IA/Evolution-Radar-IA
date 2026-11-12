@@ -133,3 +133,31 @@ test("busca de recuperação não fica presa a SP quando região é GO",async()=
    assert.ok(calls.every(q=>!q.includes("site:sp.olx.com.br")));
  }finally{globalThis.fetch=prev;}
 });
+
+
+test("Worker rejeita páginas de imóveis e celulares antes de consumir Tavily Extract",async()=>{
+ const f={...filters,priceMax:"16666",yearTo:"2024"};
+ const env={TAVILY_API_KEY:"SECRET_TEST",ALLOWED_UID:"test-user",FIREBASE_WEB_API_KEY:"PUBLIC_TEST"};
+ const req=new Request("https://evolution-radar-search.tsvalencio.workers.dev/search",{
+  method:"POST",headers:{Origin:"https://tsvalencio-ia.github.io",Authorization:"Bearer "+"x".repeat(140),"Content-Type":"application/json"},
+  body:JSON.stringify({filters:f})
+ });
+ const prev=globalThis.fetch,calls=[];
+ globalThis.fetch=async (url)=>{
+  const u=String(url);calls.push(u);
+  if(u.includes("identitytoolkit.googleapis.com"))return Response.json({users:[{localId:"test-user",disabled:false}]});
+  if(u.endsWith("/search"))return Response.json({results:[
+    {title:"Casas à venda - SP",url:"https://sp.olx.com.br/imoveis/casas"},
+    {title:"Celulares Motorola",url:"https://sp.olx.com.br/celulares"},
+    {title:"Motos Honda CG 160",url:"https://sp.olx.com.br/autos-e-pecas/motos/honda"}
+  ]});
+  return Response.json({error:"unexpected"},{status:404});
+ };
+ try{
+   const res=await worker.fetch(req,env),body=await res.json();
+   assert.equal(res.status,200);
+   assert.equal(body.items.length,1);
+   assert.match(body.items[0].title,/Motos Honda/);
+   assert.equal(calls.some(x=>x.endsWith("/extract")),false);
+ }finally{globalThis.fetch=prev;}
+});

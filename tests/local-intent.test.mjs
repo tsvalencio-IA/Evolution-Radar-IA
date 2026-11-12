@@ -56,3 +56,15 @@ test("UF divergente de cidade reconhecida não é pesquisada silenciosamente",()
  const x=parseLocalIntent("CG 160 em Goiânia, estado SP");
  assert.ok(x.warnings.some(w=>w.includes("não corresponde")));
 });
+
+
+test("Kawasaki nova limpa limites antigos de Yamaha sem apagar localização",()=>{
+ const prev={brand:"Yamaha",model:"125",version:"Factor",originCity:"São José do Rio Preto",uf:"SP",radiusKm:"150",
+   priceMin:"4500",priceMax:"18000",yearFrom:"2012",yearTo:"2024",kmMax:"300000",sellerType:"particular"};
+ const f=mergeIntentFilters(prev,{brand:"Kawasaki",model:"Ninja 400",yearFrom:"2021",yearTo:"2021",priceMax:"30000"});
+ assert.equal(f.brand,"Kawasaki");assert.equal(f.model,"Ninja 400");assert.equal(f.version,"");
+ assert.equal(f.priceMin,"");assert.equal(f.priceMax,"30000");assert.equal(f.kmMax,"");
+ assert.equal(f.yearFrom,"2021");assert.equal(f.yearTo,"2021");
+ assert.equal(f.sellerType,"all");assert.equal(f.originCity,"São José do Rio Preto");assert.equal(f.uf,"SP");
+ assert.equal(f.radiusKm,"150");
+});

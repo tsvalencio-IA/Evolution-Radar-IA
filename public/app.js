@@ -69,7 +69,7 @@ function displayDiscovery(items,metadata){
     const canRegister=x.pageType==="individual-candidate"&&x.assessment?.bucket!=="outside";
     return '<article class="lead-card"><div class="card-top"><h3 class="card-title">'+esc(x.title)+'</h3><span class="chip '+(x.assessment?.bucket==="outside"?"outside":"pending")+'">'+esc(badge)+'</span></div>'+
       '<p class="micro">'+esc(x.source)+' · '+esc(info)+'</p>'+fields+
-      '<p class="card-note">'+esc(x.snippet||"Sem resumo disponível")+'</p>'+reasons+
+      '<p class="card-note">'+esc(String(x.snippet||"Sem resumo disponível").slice(0,x.pageType==="catalog"?210:450))+'</p>'+reasons+
       '<div class="card-actions"><a class="btn secondary small" target="_blank" rel="noopener noreferrer" href="'+esc(x.url)+'">Ver fonte original ↗</a>'+
       (canRegister?'<button type="button" class="btn small" data-discovery="'+items.indexOf(x)+'">Investigar e registrar</button>':'')+'</div></article>';
   };
@@ -168,6 +168,10 @@ async function assistantSearch(){
   if(state.mode!=="remote"||!state.user){label.textContent="Entre na conta Firebase e aguarde a sincronização antes de pesquisar.";return;}
   if(!searchWorkerUrl){label.textContent="Worker de pesquisa ainda não configurado.";return;}
   button.disabled=true;button.textContent="Interpretando...";
+  // Não confundir os resultados salvos da consulta anterior com a nova solicitação.
+  latestDiscovered=[];
+  $("#automaticResults").innerHTML='<div class="empty-state">Aguardando a nova pesquisa. Resultados anteriores permanecem no histórico do Firebase.</div>';
+  $("#autoSearchState").textContent="Nova solicitação em análise";
   let localMode=false;
   try{
     const saved=readFilters();
@@ -198,13 +202,15 @@ async function assistantSearch(){
           });
         }finally{clearTimeout(abort);}
         const data=await res.json();
-        if(!res.ok)throw Error(String(data?.error||"IA indisponível"));
+        if(!res.ok)throw Error("HTTP "+res.status+": "+(data?.code?data.code+" — ":"")+(data?.detail||data?.error||"IA indisponível"));
         if(!data?.filters||typeof data.filters!=="object")throw Error("A IA não devolveu filtros válidos.");
         interpreted=data.filters;
       }catch(e){
-        label.textContent="O serviço de interpretação por IA não está publicado ou está indisponível. "+
-          "Este pedido não foi interpretado com segurança pelas regras locais. "+
-          "Preencha marca e modelo nos filtros manuais; nenhuma pesquisa foi iniciada.";
+        const explanation=e?.name==="AbortError"?"A IA não respondeu dentro de 12 segundos.":String(e?.message||"Falha desconhecida na IA");
+        label.textContent="IA Cloudflare: "+explanation+
+          " Nenhuma nova pesquisa foi feita. Os filtros visíveis continuam sendo os da consulta anterior. "+
+          "Você ainda pode usar os filtros manuais.";
+        $("#autoSearchState").textContent="Interpretação pela IA falhou; nenhuma nova pesquisa";
         return;
       }
     }

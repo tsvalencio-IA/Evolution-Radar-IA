@@ -43,18 +43,31 @@ export function classifySearchPage(url){
   return source?"catalog":"unknown";
 }
 
+// Também filtra o histórico antigo, que pode conter catálogos de imóveis/celulares.
+export function relevantSearchPage(item){
+  if(!item||typeof item!=="object")return false;
+  let u;try{u=new URL(String(item.url??""));}catch{return false;}
+  if(!marketplaceName(u.href)||u.protocol!=="https:")return false;
+  const path=decodeURIComponent(u.pathname).normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
+  if(/(?:^|\/)(?:imoveis|apartamentos?|casas?|celulares?|smartphones?|eletronicos|informatica|moda|roupas?|moveis|eletrodomesticos|terrenos?|carros|automoveis)(?:\/|$)/.test(path))return false;
+  if(classifySearchPage(u.href)==="individual-candidate")return true;
+  const title=String(item.title??"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
+  return /(?:^|\W)(?:moto|motos|motocicleta|motocicletas|honda|yamaha|suzuki|kawasaki|bajaj|dafra|shineray|triumph|bmw|factor|ninja|titan|fan|biz|fazer|ybr|cg)(?:$|\W)/.test(title) ||
+    /(?:^|\/)(?:motos?|motocicletas?)(?:\/|$)/.test(path);
+}
 export function normalizeWebLeads(raw){
   if(!Array.isArray(raw))return [];
-  const seen=new Set();
+  const seen=new Set();let catalogs=0;
   return raw.flatMap(x=>{
     if(!x||typeof x!=="object")return [];
     const title=simple(x.title),url=String(x.url??"").trim(),source=marketplaceName(url);
-    if(!source||!title||!/^https:\/\//i.test(url))return [];
+    if(!source||!title||!/^https:\/\//i.test(url)||!relevantSearchPage({url,title}))return [];
     const canonical=new URL(url); canonical.hash="";
     for(const key of [...canonical.searchParams.keys()])if(/^(utm_|fbclid$|gclid$)/i.test(key))canonical.searchParams.delete(key);
     const norm=canonical.toString();
     if(seen.has(norm))return []; seen.add(norm);
     const pageType=classifySearchPage(norm);
+    if(pageType==="catalog"&&++catalogs>5)return [];
     const raw=x.fields&&typeof x.fields==="object"?x.fields:{};
     const numeric=k=>{
       const v=raw[k];
