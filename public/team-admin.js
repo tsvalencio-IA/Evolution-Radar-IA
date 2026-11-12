@@ -7,7 +7,7 @@ export async function manageMember({db,api,user,uid,action,permissions,name}){
   const request=(await api.get(api.ref(db,"registrationRequests/"+uid))).val();
   if(!request)throw Error("Solicitação não encontrada.");
   const previous=(await api.get(api.ref(db,ROOT+"/members/"+uid))).val();
-  const status={approve:"approved",activate:"approved",permissions:"approved",rename:"approved",suspend:"suspended",revoke:"revoked"}[action];
+  const status={approve:"approved",activate:"approved",permissions:previous?.status,rename:previous?.status,suspend:"suspended",revoke:"revoked"}[action];
   if(!status)throw Error("Ação desconhecida.");
   if(!previous&&action!=="approve")throw Error("Aprove antes de administrar.");
   const displayName=action==="rename"?validAccountName(name):String(previous?.name||request.name);

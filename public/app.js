@@ -1,7 +1,7 @@
 import {emptyFilters,numberOrNull,canonicalUrl,sanitizeLead,findDuplicate,evaluateLead,sortLeads,calculateScenario,sourceSearches,money,csvExport} from "./core.mjs";
 import {firebaseConfig} from "./firebase-config.js";
 import {searchWorkerUrl} from "./search-config.js";
-import {searchQuery,normalizeWebLeads,classifyDiscoveryForFilters} from "./search-engine.mjs";
+import {searchQuery,normalizeWebLeads,partitionDiscovery} from "./search-engine.mjs";
 import {openFirebase} from "./firebase-client.js";
 import {parseLocalIntent,mergeIntentFilters} from "./local-intent.mjs";
 import {openTeam} from "./team-client.js";
@@ -47,8 +47,7 @@ async function checkAccountDeletionService(){
     finally{clearTimeout(timeout);}
     if(!res.ok)return;
     const data=await res.json();
-    state.accountDeletionReady=data?.version==="2026-11-12.4"&&
-      data?.accountDeletionConfigured===true&&
+    state.accountDeletionReady=data?.accountDeletionConfigured===true&&
       Array.isArray(data.capabilities)&&data.capabilities.includes("account-deletion");
   }catch{state.accountDeletionReady=false;}
   finally{renderTeamPanel();}
@@ -130,9 +129,7 @@ function displayDiscovery(items,metadata){
   latestDiscovered=items;
   const filters=lastDiscoveryFilters||state.filters;
   const panel=$("#automaticResults"),coverage=metadata.coverage||{};
-  const evaluated=items.map(item=>({item,region:classifyDiscoveryForFilters(item,filters)}));
-  const visible=evaluated.filter(x=>x.region.category==="in-area"&&x.item.assessment?.bucket!=="outside");
-  const excluded=evaluated.filter(x=>!visible.includes(x));
+  const {matched:visible,unresolved,excluded}=partitionDiscovery(items,filters);
   const groups={prequalified:[],pending:[]};
   for(const x of visible){
     const bucket=x.item.assessment?.bucket==="prequalified"?"prequalified":"pending";
@@ -148,15 +145,18 @@ function displayDiscovery(items,metadata){
     ' · '+esc(coverage.queriesSucceeded??"?")+' consulta(s) concluída(s). '+
     'Disponibilidade, documentos e distância por estrada exigem confirmação.</p>';
   const card=({item:x,region})=>{
-    const f=x.fields||{},badge=x.assessment?.bucket==="prequalified"?"Pré-qualificado":"Pendente";
+    const f=x.fields||{},badge=region.category==="in-area"&&x.assessment?.bucket==="prequalified"?"Pré-qualificado":"Pendente";
     const fieldValue=(value,format=value=>String(value))=>value===null||value===undefined?"Não comprovado":format(value);
     const fields='<div class="card-meta">'+
       '<span>Preço: <b>'+esc(f.price===null||f.price===undefined?"Não comprovado":money(f.price))+'</b></span>'+
       '<span>KM: <b>'+esc(fieldValue(f.km,x=>Number(x).toLocaleString("pt-BR")))+'</b></span>'+
-      '<span>Ano: <b>'+esc(fieldValue(filters.yearType==="make"?f.yearMake:f.yearModel))+'</b></span>'+
+      '<span>Ano: <b>'+esc(fieldValue((filters.yearType==="make"?f.yearMake:f.yearModel)??f.yearAdvertised))+
+      ((filters.yearType==="make"?f.yearMake:f.yearModel)==null&&f.yearAdvertised!=null?' (tipo não informado)':'')+'</b></span>'+
       '<span>Cidade: <b>'+esc(f.city||"Não comprovada")+'/'+esc(f.uf||"")+'</b></span>'+
       '<span>Distância aprox.: <b>'+esc(region.distanceKm===null?"Não aferida":region.distanceKm.toFixed(1)+" km")+'</b></span></div>';
-    const reasons=x.assessment?.reasons?.length?'<p class="card-reason">'+esc(x.assessment.reasons.join(" · "))+'</p>':"";
+    const status=region.category==="location-unverified"?"Localização e raio não confirmados":
+      region.category==="model-unverified"?"Marca, modelo ou versão a confirmar":"";
+    const reasons='<p class="card-reason">'+esc([status,...(x.assessment?.reasons||[])].filter(Boolean).join(" · "))+'</p>';
     return '<article class="lead-card"><div class="card-top"><h3 class="card-title">'+esc(x.title)+'</h3><span class="chip '+(badge==="Pré-qualificado"?"confirmed":"pending")+'">'+badge+'</span></div>'+
       '<p class="micro">'+esc(x.source)+' · anúncio individual indexado</p>'+fields+
       '<p class="card-note">'+esc(String(x.snippet||"").slice(0,450))+'</p>'+reasons+
@@ -182,8 +182,11 @@ function displayDiscovery(items,metadata){
     '<div class="suppressed-list">'+excluded.map(({item:x,region})=>
       '<div class="suppressed-entry"><strong>'+esc(x.title)+'</strong><span>'+esc(x.assessment?.bucket==="outside"?"Fora dos critérios":why[region.category]||"Informações não comprovadas")+
       '</span><a target="_blank" rel="noopener noreferrer" href="'+esc(x.url)+'">Fonte original</a></div>').join("")+'</div></details>':"";
+  const pending=unresolved.length?'<section><div class="group-head"><h2>Anúncios individuais a conferir</h2><span>'+unresolved.length+'</span></div>'+
+    '<p class="micro">Localização ou modelo ainda sem comprovação. Estes anúncios não estão classificados como compatíveis com os filtros.</p>'+
+    '<div class="cards">'+unresolved.map(card).join("")+'</div></section>':"";
   panel.innerHTML=header+(visible.length?sections:
-    '<div class="empty-state">Nenhuma oportunidade individual comprovou localização dentro do raio e os critérios mínimos. Os dados anteriores foram preservados.</div>')+suppressed;
+    '<div class="empty-state">Nenhum anúncio comprovou os critérios e a localização dentro do raio.</div>')+pending+suppressed;
 }
 
 async function automaticSearch({requestText=""}={}){
@@ -249,8 +252,10 @@ function registerDiscovery(index){
   if(!item||item.pageType!=="individual-candidate")return;
   openLead(null);
   setForm($("#leadForm"),{
-    brand:"",model:"",version:"",
-    city:"",uf:"",source:item.source,url:item.url,evidence:"index",
+    brand:item.fields?.brand||"",model:item.fields?.model||"",version:item.fields?.version||"",
+    city:item.fields?.city||"",uf:item.fields?.uf||"",price:item.fields?.price??"",km:item.fields?.km??"",
+    yearMake:item.fields?.yearMake??"",yearModel:item.fields?.yearModel??"",
+    source:item.source,url:item.url,evidence:"index",
     notes:"URL candidata a anúncio individual, encontrada em busca indexada; ainda NÃO verificada. Título: "+item.title+"\nTrecho: "+item.snippet+"\nPreencha marca, modelo, versão, ano, KM, preço e cidade apenas após verificar a página original."
   });
   $("#leadForm").elements.namedItem("brand").focus();
@@ -622,6 +627,8 @@ async function boot(){
         onAuth:user=>{
           const changed=state.user?.uid!==user?.uid;
           if(changed){
+            latestDiscovered=[];lastDiscoveryFilters=null;
+            $("#automaticResults").innerHTML="";
             state.teamInfo=null;state.sharedLeads=[];state.sharedHistory=[];
             state.history=[];state.requests=[];state.members=[];state.audit=[];
           }

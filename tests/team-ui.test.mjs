@@ -45,9 +45,9 @@ test("exclusão seleciona múltiplos botões sem usar querySelector isolado",()=
  assert.ok(app.includes(".filter(b=>b.dataset.uid===uid)"));
 });
 
-test("exclusão só é exibida com Worker 2026-11-12.4 e credencial confirmada",()=>{
+test("exclusão exige capacidade e credencial confirmadas, sem depender de versão fixa",()=>{
  assert.match(app,/accountDeletionConfigured===true/);
- assert.match(app,/version==="2026-11-12\.4"/);
+ assert.doesNotMatch(app,/data\?\.version===/);
  assert.match(app,/capabilities\.includes\("account-deletion"\)/);
  assert.match(app,/state\.accountDeletionReady\?'<button class="btn small team-danger"/);
  assert.match(app,/if\(!state\.accountDeletionReady\)return notice/);
