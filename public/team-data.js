@@ -14,9 +14,13 @@ export async function saveSharedLead({db,api,user,member,lead}){
     createdAt:old?.createdAt||new Date().toISOString(),
     updatedBy:user.uid,updatedAt:api.serverTimestamp()};
   const result=await api.runTransaction(ref,existing=>{
-    if((old&&!existing)||(!old&&existing)||existing?.archived)return;
-    return {...item,createdBy:existing?.createdBy||item.createdBy,
-      createdAt:existing?.createdAt||item.createdAt};
+    // RTDB pode iniciar a transação com null antes de hidratar o cache,
+    // mesmo após get(). Usar o snapshot lido como base inicial.
+    if(!old&&existing)return;
+    const basis=existing||old;
+    if(basis?.archived)return;
+    return {...item,createdBy:basis?.createdBy||item.createdBy,
+      createdAt:basis?.createdAt||item.createdAt};
   },{applyLocally:false});
   if(!result.committed)throw Error("Registro modificado por outra pessoa. Atualize antes de editar.");
   return item;
@@ -24,9 +28,12 @@ export async function saveSharedLead({db,api,user,member,lead}){
 export async function archiveSharedLead({db,api,user,member,id}){
   if(!memberAllowed(user,member,"delete"))throw Error("Sem permissão para arquivar.");
   const ref=api.ref(db,ROOT+"/leads/"+safeLeadId(id));
-  const result=await api.runTransaction(ref,old=>{
-    if(!old||old.archived)return;
-    return {...old,archived:true,archivedBy:user.uid,archivedAt:api.serverTimestamp(),
+  const previous=(await api.get(ref)).val();
+  if(!previous||previous.archived)throw Error("Registro não encontrado ou já arquivado.");
+  const result=await api.runTransaction(ref,current=>{
+    const base=current||previous;
+    if(!base||base.archived)return;
+    return {...base,archived:true,archivedBy:user.uid,archivedAt:api.serverTimestamp(),
       updatedBy:user.uid,updatedAt:api.serverTimestamp()};
   },{applyLocally:false});
   if(!result.committed)throw Error("Registro já arquivado.");
