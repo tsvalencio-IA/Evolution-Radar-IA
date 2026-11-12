@@ -562,7 +562,22 @@ async function boot(){
   if(configured){
     try{
       state.firebase=await openFirebase(firebaseConfig,{
-        onAuth:user=>{state.user=user;if(user){state.mode="loading";state.remoteReady=false;}else{const l=localRead();state.leads=l.leads;state.filters=l.filters;setForm($("#filterForm"),state.filters);state.mode="local";state.remoteReady=false;}renderAll();},
+        onAuth:user=>{
+          const changed=state.user?.uid!==user?.uid;
+          if(changed){
+            state.teamInfo=null;state.sharedLeads=[];state.sharedHistory=[];
+            state.history=[];state.requests=[];state.members=[];state.audit=[];
+          }
+          state.user=user;
+          if(user){
+            if(changed)state.leads=[]; // Não exibir dados do usuário anterior.
+            state.mode="loading";state.remoteReady=false;
+          }else{
+            const l=localRead();state.leads=l.leads;state.filters=l.filters;
+            setForm($("#filterForm"),state.filters);state.mode="local";state.remoteReady=false;
+          }
+          renderAll();
+        },
         onHistory:history=>{state.history=history;renderHistory();},
         onData:data=>{const raw=data?.leads;const leads=Array.isArray(raw)?raw:(raw&&typeof raw==="object"?Object.values(raw):[]);state.leads=leads.map(sanitizeLead).filter(Boolean);state.filters={...emptyFilters,...(data?.filters||{})};setForm($("#filterForm"),state.filters);state.mode="remote";state.remoteReady=true;renderAll();},
         onError:err=>{notice("Erro Firebase: "+err.message);state.mode="loading";renderAll();}
