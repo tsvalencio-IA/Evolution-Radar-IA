@@ -6,6 +6,8 @@ name = "evolution-radar-search"
 main = "worker/evolution-search-worker.js"
 compatibility_date = "2026-11-11"
 workers_dev = true
+# Preserva TAVILY_API_KEY, ALLOWED_UID e FIREBASE_WEB_API_KEY no deploy.
+keep_vars = true
 
 # Modelo gratuito sujeito à franquia diária; nenhum serviço pago será ativado.
 [ai]
