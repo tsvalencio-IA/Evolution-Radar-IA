@@ -9,7 +9,7 @@ const req=()=>new Request(url,{method:"POST",headers:authHeaders,body:JSON.strin
 const AI={run:async()=>({response:'{"brand":"Kawasaki","model":"Ninja 400","yearFrom":"2021","yearTo":"2021","originCity":"São José do Rio Preto","uf":"SP"}'})};
 async function withUser(localId,fn){
   const original=globalThis.fetch;
-  globalThis.fetch=async ()=>Response.json({users:[{localId,disabled:false}]});
+  globalThis.fetch=async url=>String(url).includes("identitytoolkit.googleapis.com")?Response.json({users:[{localId,disabled:false}]}):Response.json(null);
   try{return await fn();}finally{globalThis.fetch=original;}
 }
 
