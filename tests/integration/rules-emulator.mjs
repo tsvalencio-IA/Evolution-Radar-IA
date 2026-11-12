@@ -11,7 +11,7 @@ const env=await initializeTestEnvironment({projectId:"demo-evolution-radar",
   database:{rules}});
 after(async()=>await env.cleanup());
 const administrator=env.authenticatedContext(owner,{email:"admin@example.test"}).database();
-const applicant=env.authenticatedContext(uid,{email:mail}).database();
+const applicant=env.authenticatedContext(uid,{email:mail,email_verified:true}).database();
 const stranger=env.authenticatedContext("intruder-001",{email:"intruder@example.test"}).database();
 const anon=env.unauthenticatedContext().database();
 const root="workspaces/evolution-motos";
