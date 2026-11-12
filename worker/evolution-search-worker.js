@@ -1,3 +1,4 @@
+import {municipalityFromLocationText,assessMunicipalityRadius} from "../public/br-municipios.mjs";
 /* Evolution Radar IA — Cloudflare Worker
  * Implantação pelo painel da Cloudflare, sem terminal.
  * Segredos obrigatórios no Worker (Settings > Variables and Secrets):
@@ -148,21 +149,25 @@ export function parseFacts(page,title,f){
   const yearPairs=[...t.matchAll(/\b((?:19|20)\d{2})\s*\/\s*((?:19|20)\d{2})\b/g)].map(m=>m[1]+"/"+m[2]);
   const uniqueYears=[...new Set(yearPairs)];
   const match=uniqueYears.length===1?uniqueYears[0].split("/").map(Number):null;
-  const city=normalized(f.originCity),body=normalized(t);
-  // Só a ocorrência na localização da página comprova a cidade.
-  const pos=body.indexOf(city);
-  const nearby=pos>=0?body.slice(Math.max(0,pos-45),pos):"";
-  const cityConfirmed=city.length>2&&/(?:localizacao|cidade|municipio|endereco)\s*[:\-\s]{0,12}$/.test(nearby);
+  // Só usar localização explicitamente identificada na página, nunca copiá-la dos filtros.
+  const place=municipalityFromLocationText(t);
+  const geo=place?assessMunicipalityRadius(f,place.name,place.uf):null;
   return {
     price,km,yearMake:match?match[0]:null,yearModel:match?match[1]:null,
-    city:cityConfirmed?f.originCity:null,uf:cityConfirmed?f.uf:null
+    city:place?.name??null,uf:place?.uf??null,
+    distanceKm:geo?.distanceKm??null,distanceMethod:geo?.method??null
   };
 }
 export function gradeListing(item,f){
   const found=item.fields||{},title=normalized(item.title),reject=[],pending=[];
   const contains=v=>title.includes(normalized(v));
   if(f.brand&&!contains(f.brand))pending.push("Marca não comprovada no título");
-  if(f.model&&!normalized(f.model).split(" ").every(w=>title.includes(w)))pending.push("Modelo exato não comprovado");
+  if(f.model&&!normalized(f.model).split(" ").every(w=>title.includes(w))){
+    const expected=normalized(f.model).match(/^([a-z]+)\s*(\d{2,4})$/);
+    const observed=expected&&title.match(new RegExp("\\b"+expected[1]+"\\s*(\\d{2,4})\\b"));
+    if(observed&&observed[1]!==expected[2])reject.push("Cilindrada/modelo incompatível");
+    else pending.push("Modelo exato não comprovado");
+  }
   if(f.version&&!contains(f.version)){
     if(/\b(fan|start|titan|cargo)\b/.test(title))reject.push("Versão aparentemente diferente");
     else pending.push("Versão não comprovada");
@@ -184,9 +189,12 @@ export function gradeListing(item,f){
     if(found.km===null||found.km===undefined)pending.push("Quilometragem não comprovada");
     else if(found.km>Number(f.kmMax))reject.push("KM acima do limite");
   }
-  if(!found.city)pending.push("Localização não comprovada no anúncio");
-  if(f.radiusKm&&found.city&&normalized(found.city)!==normalized(f.originCity))
-    pending.push("Distância rodoviária não verificada");
+  if(!found.city||!found.uf)pending.push("Cidade e UF não comprovadas no anúncio");
+  else {
+    const area=assessMunicipalityRadius(f,found.city,found.uf);
+    if(area.status==="outside")reject.push("Município fora do raio solicitado (sedes municipais)");
+    else if(area.status==="unknown")pending.push("Distância geográfica não verificável");
+  }
   if(item.extractionStatus!=="extracted")pending.push("Página individual não extraída");
   return {bucket:reject.length?"outside":pending.length?"pending":"prequalified",
     reasons:reject.length?reject:pending.length?pending:["Dados da página sugerem compatibilidade; confirmar vendedor, documentação e disponibilidade"]};
@@ -264,7 +272,7 @@ async function collect(f,env){
       individualLinks:individual.length,catalogPages:catalogs.length,
       extractionAttempted:selected.length,extractionSucceeded:extracted.length,extractionFailures:failures.length,
       prequalified:individual.filter(x=>x.assessment.bucket==="prequalified").length,
-      regionRadiusVerified:false
+      regionRadiusVerified:false,regionRadiusMethod:"approximate-municipal-centers"
     },notice:"Resultado indexado ou extraído de página. Não comprova disponibilidade, documentação ou distância de rota."};
 }
 

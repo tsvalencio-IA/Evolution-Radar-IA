@@ -1,3 +1,4 @@
+import {assessMunicipalityRadius} from "./br-municipios.mjs";
 export const emptyFilters = Object.freeze({
   brand:"", model:"", version:"", yearFrom:"", yearTo:"", yearType:"model",
   priceMin:"", priceMax:"", kmMax:"", originCity:"", uf:"", radiusKm:"",
@@ -86,18 +87,25 @@ export function evaluateLead(lead, f=emptyFilters) {
     else if((low!==null&&val<low)||(high!==null&&val>high))reasons.push(label+" fora do limite");
   }
   if(normalized(f.sellerType)&&f.sellerType!=="all")compare("Vendedor",f.sellerType,lead.sellerType);
-  if(normalized(f.uf))compare("UF",f.uf,lead.uf);
+  const radius=numberOrNull(f.radiusKm);
+  // Raios podem atravessar limites de UF; só exigir UF igual em pesquisa sem raio.
+  if(!(radius!==null&&radius>0)&&normalized(f.uf))compare("UF",f.uf,lead.uf);
   if(normalized(f.originCity)) {
     const sameCity=normalized(f.originCity)===normalized(lead.city) && (!f.uf||normalized(f.uf)===normalized(lead.uf));
-    const radius=numberOrNull(f.radiusKm);
     if(!sameCity) {
-      if(!lead.city)unknown.push("Cidade não informada");
-      else if(radius!==null && radius>0){
-        if(lead.distanceVerified!==true||numberOrNull(lead.distanceKm)===null)unknown.push("Distância não verificada");
-        else if(lead.distanceKm>radius)reasons.push("Distância acima do raio");
+      if(!lead.city||!lead.uf)unknown.push("Cidade/UF não informadas");
+      else if(radius!==null&&radius>0){
+        if(lead.distanceVerified===true&&numberOrNull(lead.distanceKm)!==null){
+          if(lead.distanceKm>radius)reasons.push("Distância verificada acima do raio");
+        }else{
+          const geo=assessMunicipalityRadius(f,lead.city,lead.uf);
+          if(geo.status==="outside")reasons.push("Município fora do raio (distância aproximada entre sedes)");
+          else if(geo.status==="unknown")unknown.push("Localização não reconhecida");
+          else unknown.push("Distância rodoviária não verificada; município dentro do raio aproximado");
+        }
       } else reasons.push("Município fora do filtro");
     }
-  } else if(numberOrNull(f.radiusKm)!==null && numberOrNull(f.radiusKm)>0)unknown.push("Cidade de origem não definida para o raio");
+  } else if(radius!==null&&radius>0)unknown.push("Cidade de origem não definida para o raio");
   if(reasons.length)return {bucket:"outside",reasons};
   if(!lead.url||!canonicalUrl(lead.url))unknown.push("Link individual não informado");
   if(lead.url&&isListingOrSearchUrl(lead.url))unknown.push("Link de busca/listagem, não anúncio individual");

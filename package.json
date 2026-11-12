@@ -6,6 +6,6 @@
   "description": "Painel privado de pesquisa assistida e análise de oportunidades de motos",
   "scripts": {
     "test": "node --test",
-    "check": "node --check public/app.js && node --check public/team-client.js && node --check public/team-registration.js && node --check public/team-admin.js && node --check public/team-data.js && node --check public/team-roles.mjs && node --check public/workspace-config.js && node --check public/local-intent.mjs && node --check public/firebase-client.js && node --check public/core.mjs && node --check public/search-engine.mjs && node --check worker/evolution-search-worker.js && node --test"
+    "check": "node --check public/app.js && node --check public/team-client.js && node --check public/team-registration.js && node --check public/team-admin.js && node --check public/team-data.js && node --check public/team-roles.mjs && node --check public/workspace-config.js && node --check public/local-intent.mjs && node --check public/firebase-client.js && node --check public/br-municipios.mjs && node --check public/core.mjs && node --check public/search-engine.mjs && node --check worker/evolution-search-worker.js && node --test"
   }
 }

@@ -37,3 +37,12 @@ footer{display:flex;justify-content:space-between;gap:10px;border-top:1px solid 
 .team-entry{padding:12px}
 }
 @media(max-width:360px){.nav:has(#adminNav:not([hidden])){grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* Evidências não qualificadas continuam acessíveis, recolhidas por padrão. */
+.suppressed-evidence{margin-top:18px;border:1px solid var(--line);border-radius:13px;padding:12px 14px;min-width:0}
+.suppressed-evidence summary{cursor:pointer;font-weight:700;color:var(--muted);font-size:13px;overflow-wrap:anywhere}
+.suppressed-list{display:grid;gap:8px;margin-top:12px}
+.suppressed-entry{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;border:1px solid var(--line);border-radius:10px;padding:10px;min-width:0;font-size:12px}
+.suppressed-entry strong{flex:1 1 200px;min-width:0;overflow-wrap:anywhere}
+.suppressed-entry span{color:var(--muted)}
+.suppressed-entry a{margin-left:auto}
