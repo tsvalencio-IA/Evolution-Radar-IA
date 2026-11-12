@@ -50,6 +50,7 @@ async function authenticate(token,env){
   if(!u||u.disabled||!u.localId)return null;
   // A conta do padrinho mantém acesso sem depender da nova estrutura.
   if(u.localId===String(env.ALLOWED_UID??"").trim())return u.localId;
+  if(u.emailVerified!==true)return null;
   // A autorização da equipe vem da base; a revogação sempre prevalece
   // sobre listas antigas (ALLOWED_UIDS não pode contornar uma suspensão).
   const memberUrl="https://evolution-radar-ia-default-rtdb.firebaseio.com/"+
