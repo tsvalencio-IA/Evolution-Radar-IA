@@ -41,7 +41,13 @@ async function authenticate(token,env){
   if(!result.ok)return null;
   const data=await result.json();
   const u=data.users?.[0];
-  if(!u||u.disabled||u.localId!==env.ALLOWED_UID)return null;
+  // Mantém o administrador e permite usuários adicionais aprovados explicitamente.
+  // ALLOWED_UIDS é opcional e deve ficar somente nos Secrets da Cloudflare.
+  const allowed=new Set([
+    String(env.ALLOWED_UID??"").trim(),
+    ...String(env.ALLOWED_UIDS??"").split(/[,;\s]+/).map(x=>x.trim())
+  ].filter(Boolean));
+  if(!u||u.disabled||!allowed.has(u.localId))return null;
   return u.localId;
 }
 // Filtra páginas de outros setores ANTES de mostrar resultados e consumir extração.
