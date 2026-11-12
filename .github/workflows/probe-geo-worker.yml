@@ -15,4 +15,4 @@ jobs:
           curl -fsS -L --max-time 20 https://evolution-radar-search.tsvalencio.workers.dev/health -o /tmp/health.json
           cat /tmp/health.json
           echo
-          node -e 'const fs=require("fs");const x=JSON.parse(fs.readFileSync("/tmp/health.json","utf8"));console.log("WORKER_VERSION="+x.version);console.log("RADIUS_CAPABILITY="+(x.capabilities||[]).includes("municipal-radius"));if(x.version!=="2026-11-12.3"||!x.capabilities?.includes("municipal-radius"))process.exit(2)'
+          node -e 'const fs=require("fs");const x=JSON.parse(fs.readFileSync("/tmp/health.json","utf8"));console.log("WORKER_VERSION="+x.version);console.log("RADIUS_CAPABILITY="+(x.capabilities||[]).includes("municipal-radius"));console.log("DELETE_SECRET_PRESENT="+(x.accountDeletionConfigured===true));if(x.version!=="2026-11-12.4"||!x.capabilities?.includes("municipal-radius"))process.exit(2)'
