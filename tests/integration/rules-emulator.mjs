@@ -75,6 +75,16 @@ test("com permissão excluir, registro é arquivado; exclusão física continua 
     updatedBy:uid,updatedAt:serverTimestamp()}));
   await assertFails(remove(leadRef));
 });
+test("mesmo aprovado, colaborador sem confirmar e-mail não acessa a equipe",async()=>{
+ const unverifiedUid="unverified-001";
+ const unverified=env.authenticatedContext(unverifiedUid,{email:"unverified@example.test",email_verified:false}).database();
+ await assertSucceeds(set(ref(administrator,root+"/members/"+unverifiedUid),member(perms)));
+ await assertFails(get(ref(unverified,root+"/leads")));
+ await assertFails(set(ref(unverified,root+"/leads/unverified-bike"),{
+   id:"unverified-bike",brand:"Yamaha",model:"Factor",archived:false,createdBy:unverifiedUid,
+   createdAt:"2026-11-12T12:00:00.000Z",updatedBy:unverifiedUid,updatedAt:serverTimestamp()
+ }));
+});
 test("suspensão e revogação bloqueiam leitura sem alterar cadastros existentes",async()=>{
   await assertSucceeds(set(ref(administrator,root+"/members/"+uid),member(perms,"suspended")));
   await assertFails(get(ref(applicant,root+"/leads")));
