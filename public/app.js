@@ -454,6 +454,70 @@ function bind(){
   $("#importJson").addEventListener("change",importJson);
   $("#loginForm").addEventListener("submit",async e=>{e.preventDefault();if(!state.firebase)return;const f=new FormData(e.target);try{await state.firebase.login(String(f.get("email")),String(f.get("password")));e.target.elements.namedItem("password").value="";notice("Autenticação realizada. Carregando dados privados.");}catch(err){notice("Login não realizado: "+err.message);}});
   $("#logoutButton").addEventListener("click",async()=>{if(!state.firebase)return;try{await state.firebase.logout();notice("Sessão encerrada.");}catch(err){notice(err.message);}});
+  $("#signupForm").addEventListener("submit",async e=>{
+    e.preventDefault();
+    if(!state.team)return notice("Aguarde a conexão com o Firebase.");
+    const form=e.target,button=form.querySelector("button[type=submit]"),data=new FormData(form);
+    button.disabled=true;
+    try{
+      await state.team.signup(String(data.get("name")),String(data.get("email")),String(data.get("password")));
+      form.reset();
+      notice("Cadastro registrado. Entre com seu e-mail e senha em Configurações para acompanhar a aprovação.");
+    }catch(err){notice("Cadastro: "+(err?.message||"erro"));}
+    finally{button.disabled=false;}
+  });
+  $("#requestApprovalForm").addEventListener("submit",async e=>{
+    e.preventDefault();
+    try{await state.team.requestApproval(String(new FormData(e.target).get("name")));notice("Solicitação enviada ao padrinho.");}
+    catch(err){notice(err?.message||"Falha na solicitação");}
+  });
+  $("#adminRequests").addEventListener("click",async e=>{
+    const btn=e.target.closest("button[data-team-action]");if(!btn)return;
+    if(!isOwner()||!state.team)return;
+    const uid=btn.dataset.uid,action=btn.dataset.teamAction;
+    if(action!=="approve"&&action!=="reject")return;
+    if(!confirm(action==="approve"?"Aprovar o cadastro com permissão inicial para visualizar, pesquisar e cadastrar?":"Recusar este cadastro?"))return;
+    btn.disabled=true;
+    try{
+      if(action==="reject")await state.team.reject(uid);
+      else await state.team.adminAction(uid,"approve",DEFAULT_PERMISSIONS);
+      notice(action==="approve"?"Cadastro aprovado pelo padrinho.":"Cadastro recusado.");
+    }catch(err){notice("Administração: "+(err?.message||"erro"));}
+    finally{btn.disabled=false;}
+  });
+  $("#adminMembers").addEventListener("click",async e=>{
+    const btn=e.target.closest("button[data-team-action]");if(!btn||!isOwner()||!state.team)return;
+    const uid=btn.dataset.uid,action=btn.dataset.teamAction;
+    const item=btn.closest(".team-entry");
+    let name,permissions;
+    if(action==="rename"){
+      const current=state.members.find(m=>m.id===uid);
+      name=prompt("Novo nome de exibição do colaborador:",current?.name||"");
+      if(name===null)return;
+    }
+    if(action==="permissions"){
+      permissions=Object.fromEntries([...item.querySelectorAll("input[data-perm]")].map(x=>[x.dataset.perm,x.checked]));
+      if(!confirm("Salvar estas permissões para o colaborador?"))return;
+    }
+    if(["revoke","suspend"].includes(action)&&!confirm(
+      action==="revoke"?"Revogar o acesso do colaborador? O login Firebase continuará existindo, mas ficará bloqueado no sistema.":"Suspender temporariamente o acesso?"))return;
+    btn.disabled=true;
+    try{await state.team.adminAction(uid,action,permissions,name);notice("Alteração de acesso registrada.");}
+    catch(err){notice("Administração: "+(err?.message||"erro"));}
+    finally{btn.disabled=false;}
+  });
+  $("#copyLegacyLeads").addEventListener("click",async e=>{
+    if(!isOwner()||!state.team)return notice("Somente o padrinho pode executar a cópia.");
+    if(!state.leads.length)return notice("Nenhum registro antigo precisa ser copiado.");
+    if(!confirm("Copiar "+state.leads.length+" registros antigos para a base compartilhada, sem apagar os originais?"))return;
+    const button=e.currentTarget;button.disabled=true;
+    try{
+      const result=await state.team.importLegacy(state.leads);
+      $("#teamCopyStatus").textContent=result.copied+" copiados, "+result.skipped+" já existentes. Todos os originais foram preservados.";
+      notice("Cópia concluída. Os registros antigos não foram alterados.");
+    }catch(err){notice("Cópia incompleta: "+(err?.message||"erro"));}
+    finally{button.disabled=false;}
+  });
 }
 async function boot(){
   const local=localRead();state.filters=local.filters;state.leads=local.leads;
