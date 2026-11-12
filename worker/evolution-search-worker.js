@@ -358,13 +358,106 @@ async function interpretRequest(message,uid,env){
   }
 }
 
+// Exclusão REAL do Firebase Authentication: só servidor, com conta de serviço
+// limitada ao projeto e guardada no Secret FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON.
+const uidPattern=/^[A-Za-z0-9_-]{12,128}$/;
+const b64url=bytes=>btoa(String.fromCharCode(...bytes)).replace(/=/g,"").replace(/\+/g,"-").replace(/\//g,"_");
+async function firebaseAdminToken(env){
+  if(!env.FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON)throw Error("ADMIN_CREDENTIALS_MISSING");
+  let credentials;
+  try{credentials=JSON.parse(env.FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON);}catch{throw Error("ADMIN_CREDENTIALS_INVALID");}
+  if(credentials.project_id!=="evolution-radar-ia"||typeof credentials.client_email!=="string"||
+    typeof credentials.private_key!=="string"||credentials.token_uri!=="https://oauth2.googleapis.com/token")
+    throw Error("ADMIN_CREDENTIALS_INVALID");
+  const pem=credentials.private_key.match(/-----BEGIN PRIVATE KEY-----([\s\S]+?)-----END PRIVATE KEY-----/);
+  if(!pem)throw Error("ADMIN_CREDENTIALS_INVALID");
+  const bytes=Uint8Array.from(atob(pem[1].replace(/\s+/g,"")),v=>v.charCodeAt(0));
+  const key=await crypto.subtle.importKey("pkcs8",bytes,{name:"RSASSA-PKCS1-v1_5",hash:"SHA-256"},false,["sign"]);
+  const now=Math.floor(Date.now()/1000),encoder=new TextEncoder();
+  const header=b64url(encoder.encode(JSON.stringify({alg:"RS256",typ:"JWT"})));
+  const claim=b64url(encoder.encode(JSON.stringify({
+    iss:credentials.client_email,scope:"https://www.googleapis.com/auth/identitytoolkit",
+    aud:credentials.token_uri,iat:now,exp:now+1200
+  })));
+  const signed=header+"."+claim,signature=await crypto.subtle.sign("RSASSA-PKCS1-v1_5",key,encoder.encode(signed));
+  const body=new URLSearchParams({grant_type:"urn:ietf:params:oauth:grant-type:jwt-bearer",assertion:signed+"."+b64url(new Uint8Array(signature))});
+  const oauth=await fetch("https://oauth2.googleapis.com/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:body.toString()});
+  const token=await oauth.json();
+  if(!oauth.ok||typeof token.access_token!=="string")throw Error("ADMIN_OAUTH_FAILED");
+  return token.access_token;
+}
+const authAdminEndpoint=method=>"https://identitytoolkit.googleapis.com/v1/projects/evolution-radar-ia/accounts:"+method;
+async function adminApi(method,accessToken,body){
+  const result=await fetch(authAdminEndpoint(method),{method:"POST",
+    headers:{"Authorization":"Bearer "+accessToken,"Content-Type":"application/json"},
+    body:JSON.stringify(body)});
+  const data=await result.json().catch(()=>({}));
+  if(!result.ok)throw Error("FIREBASE_AUTH_"+method.toUpperCase()+"_"+String(data.error?.message||result.status).slice(0,70));
+  return data;
+}
+const dbUrl=path=>"https://evolution-radar-ia-default-rtdb.firebaseio.com/"+path+".json";
+async function ownerDb(method,path,token,body){
+  const url=dbUrl(path)+"?auth="+encodeURIComponent(token);
+  const result=await fetch(url,{method,headers:{"Content-Type":"application/json"},
+    ...(body===undefined?{}:{body:JSON.stringify(body)})});
+  if(!result.ok)throw Error("DATABASE_"+method+"_"+result.status);
+  return result.json().catch(()=>null);
+}
+async function deleteRegisteredUser(payload,token,env){
+  const uid=String(payload?.uid||""),email=String(payload?.email||"").trim().toLowerCase();
+  if(!uidPattern.test(uid)||!email||email.length>254||payload?.confirmation!=="EXCLUIR")
+    return response({error:"Confirmação inválida.",code:"DELETE_CONFIRMATION_INVALID"},400);
+  if(uid===env.ALLOWED_UID)return response({error:"A conta principal está protegida.",code:"OWNER_PROTECTED"},403);
+  if(!env.FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON)
+    return response({error:"Exclusão de contas ainda não configurada no servidor.",code:"ADMIN_CREDENTIALS_MISSING"},503);
+  let accessToken;
+  try{
+    const registry=await ownerDb("GET","registrationRequests/"+uid,token);
+    if(!registry||registry.sponsorUid!==env.ALLOWED_UID||String(registry.email||"").toLowerCase()!==email)
+      return response({error:"Colaborador não pertence a esta equipe.",code:"MEMBER_NOT_FOUND"},404);
+    accessToken=await firebaseAdminToken(env);
+    const account=await adminApi("lookup",accessToken,{localId:[uid]});
+    if(account.users?.length!==1||String(account.users[0].email||"").toLowerCase()!==email)
+      return response({error:"Identidade não confere. Nenhuma conta foi excluída.",code:"ACCOUNT_MISMATCH"},409);
+    // Bloquear imediatamente o acesso antes da exclusão, preservando registros coletivos.
+    const member=await ownerDb("GET","workspaces/evolution-motos/members/"+uid,token);
+    if(member)await ownerDb("PATCH","workspaces/evolution-motos/members/"+uid,token,{
+      status:"revoked",reviewedBy:env.ALLOWED_UID,reviewedAt:{".sv":"timestamp"}
+    });
+    await ownerDb("PATCH","registrationRequests/"+uid,token,{
+      status:"revoked",reviewedBy:env.ALLOWED_UID,reviewedAt:{".sv":"timestamp"}
+    });
+    // Exclusão definitiva: API administrativa do Firebase Auth.
+    await adminApi("delete",accessToken,{localId:uid});
+  }catch(error){
+    const code=String(error.message||"DELETE_FAILED");
+    const status=code==="ADMIN_CREDENTIALS_INVALID"||code==="ADMIN_OAUTH_FAILED"?503:502;
+    return response({error:"Conta não excluída do Firebase Authentication.",code,detail:"Verifique as credenciais e permissões do serviço administrativo."},status);
+  }
+  // Após o Auth confirmar a exclusão, limpar somente o cadastro e o vínculo.
+  // Preservar oportunidades, buscas, auditoria e dados privados legados.
+  const incomplete=[];
+  for(const path of ["workspaces/evolution-motos/members/"+uid,"registrationRequests/"+uid]){
+    try{await ownerDb("DELETE",path,token);}catch{incomplete.push(path.includes("members")?"member":"registration");}
+  }
+  try{
+    await ownerDb("POST","workspaces/evolution-motos/adminAudit",token,{
+      action:"delete",actorUid:env.ALLOWED_UID,targetUid:uid,at:{".sv":"timestamp"}
+    });
+  }catch{incomplete.push("audit");}
+  if(incomplete.length)return response({deletedAuth:true,deleted:false,
+    error:"Conta removida do Firebase Authentication, mas a limpeza administrativa não foi concluída.",
+    code:"PARTIAL_DELETE",pending:incomplete},207);
+  return response({deletedAuth:true,deleted:true,uid});
+}
+
 export default {
   async fetch(request,env){
     if(request.method==="GET"&&new URL(request.url).pathname==="/health")
-      return response({service:"Evolution Radar IA",version:"2026-11-12.3",capabilities:["search","interpret","municipal-radius"],radiusMethod:"approximate-municipal-centers",status:"online",aiBinding:env.AI?.run?"connected":"missing",aiInference:"not-tested-by-health"});
+      return response({service:"Evolution Radar IA",version:"2026-11-12.4",capabilities:["search","interpret","municipal-radius","account-deletion"],radiusMethod:"approximate-municipal-centers",status:"online",aiBinding:env.AI?.run?"connected":"missing",aiInference:"not-tested-by-health",accountDeletionConfigured:!!env.FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON});
     if(request.method==="OPTIONS")return new Response(null,{status:204,headers:cors});
     const endpoint=new URL(request.url).pathname;
-    if(!["/search","/interpret"].includes(endpoint)||request.method!=="POST")return response({error:"Endpoint inexistente"},404);
+    if(!["/search","/interpret","/admin/delete-user"].includes(endpoint)||request.method!=="POST")return response({error:"Endpoint inexistente"},404);
     if(request.headers.get("Origin")!==ORIGIN)return response({error:"Origem não autorizada"},403);
     if(!env.ALLOWED_UID||!env.FIREBASE_WEB_API_KEY||(endpoint==="/search"&&!env.TAVILY_API_KEY))return response({error:"Conector não configurado"},503);
     const token=(request.headers.get("Authorization")||"").replace(/^Bearer\s+/i,"");
@@ -372,8 +465,10 @@ export default {
     let valid;
     try{valid=await authenticate(token,env)}catch{return response({error:"Falha na validação do login"},502);}
     if(!valid)return response({error:"Usuário não autorizado"},403);
+    if(endpoint==="/admin/delete-user"&&valid!==String(env.ALLOWED_UID))return response({error:"Somente o administrador pode excluir contas."},403);
     let payload;
     try{if(Number(request.headers.get("Content-Length")||0)>4000)return response({error:"Requisição muito grande"},413);payload=await request.json();}catch{return response({error:"JSON inválido"},400);}
+    if(endpoint==="/admin/delete-user")return deleteRegisteredUser(payload,token,env);
     if(endpoint==="/interpret")return interpretRequest(payload?.message,valid,env);
     if(!validFilters(payload?.filters))return response({error:"Informe marca, modelo, cidade e UF válidos"},400);
     // Limite de consumo: cada consulta faz até 3 buscas básicas e até 5 extrações básicas.

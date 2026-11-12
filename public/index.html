@@ -26,16 +26,16 @@
     <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
     <div id="accessNotice" class="notice" hidden role="status" aria-live="polite"></div>
     <section id="view-pesquisa" class="view active">
-      <div class="hero"><div><p class="eyebrow">INTELIGÊNCIA DE MERCADO</p><h1>Encontre a próxima oportunidade.</h1><p>Filtros rigorosos, links originais, evidências verificáveis. Sem preços ou resultados inventados.</p></div><span class="hero-art" aria-hidden="true">◎</span></div>
-      <div class="notice"><strong>Pesquisa rastreável:</strong> o radar consulta fontes indexadas e tenta investigar anúncios individuais. A IA ajuda a interpretar seu pedido; nenhum resultado comprova disponibilidade ou documentação sem verificação.</div>
+      <div class="hero"><div><p class="eyebrow">INTELIGÊNCIA DE MERCADO</p><h1>Encontre a próxima oportunidade.</h1></div><span class="hero-art" aria-hidden="true">◎</span></div>
+      
       <div class="panel" id="assistantPanel">
         <div class="section-title"><h2>Assistente de pesquisa IA</h2><span>Cloudflare Workers AI</span></div>
         <label>Descreva a moto que deseja encontrar<textarea id="assistantPrompt" rows="3" maxlength="450" placeholder="Ex.: Procure Yamaha Factor 125 ano 2012 até R$ 8.000 em São José do Rio Preto, SP"></textarea></label>
         <div class="actions"><button class="btn primary" id="assistantSend" type="button">Interpretar e pesquisar</button><button class="btn secondary" id="assistantMic" type="button" hidden>🎙 Ditar pedido</button></div>
-        <p class="micro" id="assistantReply" role="status" aria-live="polite">A IA interpreta os filtros, a Tavily pesquisa e o histórico é salvo no Firebase. Dados de anúncios não serão inventados.</p>
+        <p class="micro" id="assistantReply" role="status" aria-live="polite"></p>
       </div>
       <form id="filterForm" class="panel">
-        <div class="section-title"><h2>Filtros da pesquisa</h2><span>Respeitados quando preenchidos</span></div>
+        <div class="section-title"><h2>Filtros da pesquisa</h2></div>
         <div class="form-grid">
           <label>Marca<input name="brand" placeholder="Honda"></label>
           <label>Modelo exato<input name="model" placeholder="CG 160"></label>
@@ -57,13 +57,13 @@
       <div id="searchLinks" class="panel" hidden></div>
       <div class="panel" id="automaticSearch">
         <div class="section-title"><h2>Pesquisa automática de anúncios</h2><span id="autoSearchState">Conector pendente</span></div>
-        <p class="micro">Busca na web com resultados indexados de fontes verificáveis. Mesmo com link, uma prévia não garante que a moto está disponível, nem confirma os filtros antes de abrir a página.</p>
+        
         <div class="actions"><button class="btn primary" type="button" id="automaticSearchButton">Pesquisar motos agora</button></div>
         <div id="automaticResults" aria-live="polite"></div>
       </div>
       <div class="panel" id="searchHistoryPanel">
         <div class="section-title"><h2>Histórico de pesquisas</h2><span>Firebase · até 50 recentes</span></div>
-        <p class="micro">Consultas e resultados guardados por usuário. Reabrir um histórico não faz nova consulta à Tavily.</p>
+        
         <div id="searchHistory" aria-live="polite"><p class="micro">Entre na sua conta Firebase para consultar o histórico.</p></div>
       </div>
       <div class="panel"><div class="section-title"><h2>Resumo de evidências</h2><span>Histórico registrado</span></div>
@@ -73,12 +73,12 @@
       </div>
     </section>
     <section id="view-oportunidades" class="view">
-      <div class="page-heading"><div><p class="eyebrow">BASE DE EVIDÊNCIAS</p><h1>Oportunidades</h1><p>Registros auditáveis adicionados por você.</p></div><button class="btn primary" id="addLead" type="button">+ Adicionar</button></div>
-      <div class="notice">O sistema não transforma resultado indexado em moto disponível. Dados ausentes permanecem pendentes.</div>
+      <div class="page-heading"><div><p class="eyebrow">BASE DE EVIDÊNCIAS</p><h1>Oportunidades</h1></div><button class="btn primary" id="addLead" type="button">+ Adicionar</button></div>
+      
       <div id="leadGroups" class="lead-groups"></div>
     </section>
     <section id="view-analise" class="view">
-      <div class="page-heading"><div><p class="eyebrow">SIMULAÇÃO FINANCEIRA</p><h1>Análise de revenda</h1><p>Informe todas as despesas, inclusive zero, para calcular o cenário.</p></div></div>
+      <div class="page-heading"><div><p class="eyebrow">SIMULAÇÃO FINANCEIRA</p><h1>Análise de revenda</h1></div></div>
       <form id="financeForm" class="panel">
         <label>Anúncio registrado<select name="lead" id="financeLead"><option value="">Sem anúncio selecionado</option></select></label>
         <div class="form-grid">
@@ -97,15 +97,14 @@
       </form>
     </section>
     <section id="view-config" class="view">
-      <div class="page-heading"><div><p class="eyebrow">PRIVACIDADE E CONTROLE</p><h1>Configurações</h1><p>Firebase opcional até configurar o projeto.</p></div></div>
+      <div class="page-heading"><div><p class="eyebrow">PRIVACIDADE E CONTROLE</p><h1>Configurações</h1></div></div>
       <div class="panel"><h2>Armazenamento</h2><p id="storageDescription"></p><p id="firebaseStatus" class="micro"></p>
         <form id="loginForm" class="form-inline" hidden><label>E-mail<input name="email" type="email" required autocomplete="username"></label><label>Senha<input name="password" type="password" required autocomplete="current-password"></label><button class="btn primary" type="submit">Entrar</button></form>
         <button id="logoutButton" class="btn secondary" type="button" hidden>Sair da conta</button>
         <div id="accountStatus" class="notice" hidden></div>
         <div id="verificationActions" class="actions" hidden><button id="resendVerification" type="button" class="btn secondary">Reenviar confirmação de e-mail</button><button id="refreshVerification" type="button" class="btn secondary">Já confirmei meu e-mail</button></div>
         <form id="signupForm" class="panel team-form">
-          <h3>Criar conta — solicitar apadrinhamento</h3>
-          <p class="micro">O cadastro é gratuito, mas só permite pesquisar após a aprovação do padrinho.</p>
+          <h3>Criar conta</h3>
           <div class="form-grid">
             <label>Nome completo<input name="name" required minlength="2" maxlength="90" autocomplete="name"></label>
             <label>E-mail<input name="email" type="email" required autocomplete="email"></label>
@@ -114,35 +113,34 @@
           <div class="actions"><button class="btn primary" type="submit">Criar conta e pedir aprovação</button></div>
         </form>
         <form id="requestApprovalForm" class="team-form" hidden>
-          <p class="micro">Sua conta existe, mas não possui pedido registrado. Solicite a aprovação abaixo.</p>
           <label>Nome completo<input name="name" required minlength="2" maxlength="90" autocomplete="name"></label>
           <button class="btn primary" type="submit">Solicitar aprovação</button>
         </form>
       </div>
-      <div class="panel"><h2>Backup e exportação</h2><p>O backup é manual. Importar une registros sem apagar os existentes automaticamente.</p>
+      <div class="panel"><h2>Backup e exportação</h2>
         <div class="actions"><button id="exportJson" class="btn secondary" type="button">Baixar JSON</button><button id="exportCsv" class="btn secondary" type="button">Exportar CSV</button><label class="btn ghost file-button">Importar JSON<input id="importJson" type="file" accept=".json,application/json" hidden></label></div>
       </div>
-      <div class="panel"><h2>Limitações transparentes</h2><p>O radar utiliza a Tavily para pesquisar páginas indexadas. Não possui API oficial dos classificados, não garante disponibilidade nem raio rodoviário e diferencia resultados preliminares de registros conferidos. O assistente de IA depende da publicação do Worker atualizado.</p><p class="micro">Powered by thIAguinho Soluções Digitais</p></div>
+      
     </section>
     <section id="view-admin" class="view">
-      <div class="page-heading"><div><p class="eyebrow">ACESSO CONTROLADO</p><h1>Administração de usuários</h1><p>O padrinho aprova cada novo cadastro e define permissões individuais.</p></div></div>
-      <div id="teamSetupStatus" class="notice">Aguardando sincronização com a base compartilhada.</div>
+      <div class="page-heading"><div><p class="eyebrow">ACESSO CONTROLADO</p><h1>Usuários</h1></div></div>
+      <div id="teamSetupStatus" class="micro" role="status">Sincronizando...</div>
       <div class="panel">
-        <div class="section-title"><h2>Solicitações de cadastro</h2><span>Decisão exclusiva do padrinho</span></div>
+        <div class="section-title"><h2>Solicitações</h2></div>
         <div id="adminRequests" aria-live="polite">Nenhuma solicitação carregada.</div>
       </div>
       <div class="panel">
-        <div class="section-title"><h2>Colaboradores e permissões</h2><span>Visualizar · Pesquisar · Cadastrar · Editar · Arquivar</span></div>
+        <div class="section-title"><h2>Colaboradores</h2></div>
         <div id="adminMembers" aria-live="polite">Nenhum colaborador carregado.</div>
       </div>
       <div class="panel">
         <h2>Base compartilhada</h2>
-        <p class="micro">Registros antigos do administrador não são apagados. Uma cópia não destrutiva pode ser incorporada à base compartilhada quando você confirmar.</p>
+        
         <div class="actions"><button id="copyLegacyLeads" class="btn secondary" type="button">Copiar registros anteriores para a base compartilhada</button>
         <button id="copyLegacyHistory" class="btn secondary" type="button">Copiar histórico de pesquisas anteriores</button></div>
         <p id="teamCopyStatus" class="micro" aria-live="polite"></p>
       </div>
-      <div class="panel"><h2>Auditoria de acessos</h2><p class="micro">Registro das decisões realizadas pelo padrinho.</p><div id="adminAudit"></div></div>
+      <div class="panel"><h2>Auditoria</h2><div id="adminAudit"></div></div>
     </section>
       </main>
   <footer><span>EVOLUTION MOTOS</span><span>Powered by thIAguinho Soluções Digitais</span></footer>
@@ -150,7 +148,7 @@
 <dialog id="leadDialog">
   <form id="leadForm" class="dialog-form">
     <div class="dialog-title"><h2 id="leadDialogTitle">Registrar anúncio ou lead</h2><button id="closeLead" type="button" class="icon-button" aria-label="Fechar">✕</button></div>
-    <p class="micro">Preencha somente o que está realmente confirmado pela fonte. Deixe desconhecidos em branco.</p>
+    
     <input type="hidden" name="id">
     <div class="form-grid">
       <label>Marca<input name="brand" required placeholder="Honda"></label>

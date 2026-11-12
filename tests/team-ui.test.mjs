@@ -25,3 +25,31 @@ test("cópia é confirmada e não apaga originais",()=>{
  assert.match(app,/confirm\("Copiar "\+state\.leads\.length/);
  assert.match(app,/importLegacyHistory/);
 });
+
+test("exclusão aparece para pendentes e aprovados e exige confirmação dupla",()=>{
+ assert.match(app,/data-team-action="delete"/);
+ assert.ok(app.includes("deleteTeamUser(uid)"));
+ assert.ok(app.includes('prompt('));
+ assert.ok(app.includes('EXCLUIR'));
+ assert.ok(app.includes('await state.team.deleteUser(uid,email)'));
+});
+test("interface compacta evita justificativas repetitivas nos campos",()=>{
+ assert.doesNotMatch(html,/O padrinho aprova cada novo cadastro e define permissões individuais/);
+ assert.doesNotMatch(html,/O cadastro é gratuito, mas só permite pesquisar/);
+ assert.doesNotMatch(html,/Limitações transparentes/);
+});
+
+test("exclusão seleciona múltiplos botões sem usar querySelector isolado",()=>{
+ assert.ok(app.includes("const buttons=$$('"));
+ assert.ok(app.includes('data-team-action="delete"]'));
+ assert.ok(app.includes(".filter(b=>b.dataset.uid===uid)"));
+});
+
+test("exclusão só é exibida com Worker 2026-11-12.4 e credencial confirmada",()=>{
+ assert.match(app,/accountDeletionConfigured===true/);
+ assert.match(app,/version==="2026-11-12\.4"/);
+ assert.match(app,/capabilities\.includes\("account-deletion"\)/);
+ assert.match(app,/state\.accountDeletionReady\?'<button class="btn small team-danger"/);
+ assert.match(app,/if\(!state\.accountDeletionReady\)return notice/);
+ assert.match(app,/void checkAccountDeletionService\(\)/);
+});

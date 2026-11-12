@@ -8,7 +8,7 @@ import {openTeam} from "./team-client.js";
 import {DEFAULT_PERMISSIONS,PERMISSION_NAMES} from "./team-roles.mjs";
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const LOCAL="evolution-radar-ia-local-v1",THEME="evolution-radar-ia-theme";
-const state={filters:{...emptyFilters},leads:[],history:[],mode:"local",firebase:null,user:null,remoteReady:false,team:null,teamInfo:null,sharedLeads:[],sharedHistory:[],requests:[],members:[],audit:[]};
+const state={filters:{...emptyFilters},leads:[],history:[],mode:"local",firebase:null,user:null,remoteReady:false,team:null,teamInfo:null,sharedLeads:[],sharedHistory:[],requests:[],members:[],audit:[],accountDeletionReady:false};
 const labels={purchase:"compra",resale:"revenda",transport:"transporte",documents:"documentos",repairs:"reparos",labor:"mão de obra",taxes:"taxas",commissions:"comissões",other:"outros custos"};
 let toastTimer,saveQueue=Promise.resolve(),latestDiscovered=[],lastDiscoveryFilters=null;
 const esc=x=>String(x??"").replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
@@ -34,6 +34,25 @@ function permissionsEditor(perms,uid){
     '<label><input type="checkbox" data-perm="'+p+'" '+(perms?.[p]===true?'checked':'')+'> '+
     esc({view:"Visualizar",search:"Pesquisar",create:"Cadastrar",edit:"Editar",delete:"Arquivar"}[p])+'</label>').join("")+'</div>';
 }
+async function checkAccountDeletionService(){
+  // O botão só aparece quando a versão correta do Worker informa credencial presente.
+  // Qualquer erro/timeout falha fechado, sem simular exclusão de contas.
+  state.accountDeletionReady=false;
+  if(!searchWorkerUrl)return;
+  try{
+    const controller=new AbortController();
+    const timeout=setTimeout(()=>controller.abort(),7000);
+    let res;
+    try{res=await fetch(new URL("/health",searchWorkerUrl),{cache:"no-store",signal:controller.signal});}
+    finally{clearTimeout(timeout);}
+    if(!res.ok)return;
+    const data=await res.json();
+    state.accountDeletionReady=data?.version==="2026-11-12.4"&&
+      data?.accountDeletionConfigured===true&&
+      Array.isArray(data.capabilities)&&data.capabilities.includes("account-deletion");
+  }catch{state.accountDeletionReady=false;}
+  finally{renderTeamPanel();}
+}
 function renderTeamPanel(){
   const auth=!!state.user,owner=isOwner(),info=state.teamInfo;
   $("#signupForm").hidden=auth||!state.firebase;
@@ -52,9 +71,8 @@ function renderTeamPanel(){
   status.hidden=!pending;status.textContent=msg;
   $$("[data-view]").forEach(b=>{if(b.id!=="adminNav"&&b.dataset.view!=="config")b.hidden=pending;});
   if(pending&&!$("#view-config").classList.contains("active"))switchView("config");
-  $("#teamSetupStatus").textContent=owner?
-    "O controle de acesso depende das regras do Firebase publicadas. Cadastro, aprovação e revogação são aplicados imediatamente quando a sincronização está ativa.":
-    "Área exclusiva do padrinho.";
+  $("#teamSetupStatus").textContent=owner?"":"";
+  $("#teamSetupStatus").hidden=true;
   if(!owner)return;
   const waiting=state.requests.filter(r=>r.status==="pending");
   $("#adminRequests").innerHTML=waiting.length?waiting.map(r=>
@@ -62,7 +80,8 @@ function renderTeamPanel(){
     '<div class="meta">E-mail: '+esc(r.email||"")+' · Solicitação: '+
       esc(r.createdAt?new Date(r.createdAt).toLocaleString("pt-BR"):"Data não informada")+'</div>'+
     '<div class="actions"><button class="btn primary small" data-uid="'+esc(r.id)+'" data-team-action="approve">Aprovar com permissões iniciais</button>'+
-    '<button class="btn secondary small" data-uid="'+esc(r.id)+'" data-team-action="reject">Recusar</button></div></article>').join(""):
+    '<button class="btn secondary small" data-uid="'+esc(r.id)+'" data-team-action="reject">Recusar</button>'+
+    (state.accountDeletionReady?'<button class="btn small team-danger" data-uid="'+esc(r.id)+'" data-team-action="delete">Excluir usuário</button>':"")+'</div></article>').join(""):
     '<p class="micro">Não há solicitações pendentes.</p>';
   $("#adminMembers").innerHTML=state.members.length?state.members.map(m=>
     '<article class="team-entry" data-member="'+esc(m.id)+'"><h3>'+esc(m.name||"Colaborador")+'</h3>'+
@@ -72,7 +91,8 @@ function renderTeamPanel(){
     '<button class="btn secondary small" data-uid="'+esc(m.id)+'" data-team-action="rename">Editar nome</button>'+
     (m.status==="approved"?'<button class="btn small" data-uid="'+esc(m.id)+'" data-team-action="suspend">Suspender</button>':
       '<button class="btn small" data-uid="'+esc(m.id)+'" data-team-action="activate">Reativar</button>')+
-    '<button class="btn small" data-uid="'+esc(m.id)+'" data-team-action="revoke">Revogar acesso</button></div></article>').join(""):
+    '<button class="btn small" data-uid="'+esc(m.id)+'" data-team-action="revoke">Revogar acesso</button>'+
+    (state.accountDeletionReady?'<button class="btn small team-danger" data-uid="'+esc(m.id)+'" data-team-action="delete">Excluir usuário</button>':"")+'</div></article>').join(""):
     '<p class="micro">Nenhum colaborador aprovado.</p>';
   $("#adminAudit").innerHTML=state.audit.length?state.audit.slice(0,30).map(x=>
     '<div class="team-entry"><span class="meta">'+
@@ -456,6 +476,24 @@ function calculate(e){
   out.innerHTML='<strong>Custo total estimado:</strong> '+esc(money(r.totalCost))+'<br><strong>Resultado estimado antes de outras despesas não identificadas:</strong><br><span class="amount">'+esc(money(r.outcome))+'</span><br><strong>Margem sobre a revenda:</strong> '+r.marginPercent.toFixed(2)+'% · <strong>Retorno sobre custo:</strong> '+(r.returnPercent===null?"Não calculável":r.returnPercent.toFixed(2)+"%")+'<p class="micro">Cenário matemático, não garantia de preço final, venda ou lucro líquido. Confirme despesas, riscos, impostos e comparáveis.</p>';
 }
 function theme(){const current=document.documentElement.dataset.theme||"dark",next=current==="dark"?"light":"dark";document.documentElement.dataset.theme=next;localStorage.setItem(THEME,next);}
+async function deleteTeamUser(uid){
+  if(!state.accountDeletionReady)return notice("Exclusão definitiva ainda não está habilitada no servidor.");
+  if(!isOwner()||!state.team||!state.user)return notice("Somente o administrador pode excluir contas.");
+  const record=state.members.find(x=>x.id===uid)||state.requests.find(x=>x.id===uid);
+  if(!record)return notice("Usuário não encontrado no cadastro da equipe.");
+  const email=String(record.email||"").trim();
+  if(!email)return notice("Conta sem e-mail identificável. Exclusão bloqueada.");
+  if(!confirm("Excluir definitivamente a conta Firebase de "+email+"?"))return;
+  if(prompt('Digite EXCLUIR para confirmar a exclusão de '+email+':')!=="EXCLUIR")return;
+  const buttons=$$('[data-team-action="delete"]').filter(b=>b.dataset.uid===uid);
+  buttons.forEach(b=>b.disabled=true);
+  try{
+    await state.team.deleteUser(uid,email);
+    notice("Conta excluída do Firebase Authentication e do cadastro da equipe.");
+  }catch(err){
+    notice("Exclusão não concluída: "+String(err?.message||"erro"));
+  }finally{buttons.forEach(b=>b.disabled=false);}
+}
 function bind(){
   $$("[data-view]").forEach(b=>b.addEventListener("click",()=>switchView(b.dataset.view)));
   $("#themeToggle").addEventListener("click",theme);
@@ -513,8 +551,9 @@ function bind(){
     const btn=e.target.closest("button[data-team-action]");if(!btn)return;
     if(!isOwner()||!state.team)return;
     const uid=btn.dataset.uid,action=btn.dataset.teamAction;
-    if(action!=="approve"&&action!=="reject")return;
-    if(!confirm(action==="approve"?"Aprovar o cadastro com permissão inicial para visualizar, pesquisar e cadastrar?":"Recusar este cadastro?"))return;
+    if(action!=="approve"&&action!=="reject"&&action!=="delete")return;
+    if(action==="delete"){await deleteTeamUser(uid);return;}
+    if(!confirm(action==="approve"?"Aprovar este usuário?":"Recusar este usuário?"))return;
     btn.disabled=true;
     try{
       if(action==="reject")await state.team.reject(uid);
@@ -526,6 +565,7 @@ function bind(){
   $("#adminMembers").addEventListener("click",async e=>{
     const btn=e.target.closest("button[data-team-action]");if(!btn||!isOwner()||!state.team)return;
     const uid=btn.dataset.uid,action=btn.dataset.teamAction;
+    if(action==="delete"){await deleteTeamUser(uid);return;}
     const item=btn.closest(".team-entry");
     let name,permissions;
     if(action==="rename"){
@@ -573,6 +613,7 @@ async function boot(){
   const local=localRead();state.filters=local.filters;state.leads=local.leads;
   try{document.documentElement.dataset.theme=localStorage.getItem(THEME)==="light"?"light":"dark";}catch{}
   setForm($("#filterForm"),state.filters);bind();renderAll();
+  void checkAccountDeletionService();
   $("#autoSearchState").textContent=searchWorkerUrl?"Conector disponível":"Conector gratuito ainda não configurado";
   const configured=!!firebaseConfig?.apiKey&&!!firebaseConfig?.projectId&&!!firebaseConfig?.databaseURL;
   if(configured){
