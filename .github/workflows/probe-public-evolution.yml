@@ -1,0 +1,32 @@
+name: Diagnostico publico Evolution Radar IA
+on:
+  push:
+    branches:
+      - diagnostico/saude-publicacao-evolution-20261112
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Verificar site e arquivo geografico publicados
+        shell: bash
+        run: |
+          set -euo pipefail
+          SITE=https://tsvalencio-ia.github.io/Evolution-Radar-IA/
+          status=$(curl -L --max-time 20 -sS -o /tmp/evolution-index -w '%{http_code}' "${SITE}index.html")
+          geo=$(curl -L --max-time 20 -sS -o /tmp/evolution-geo -w '%{http_code}' "${SITE}br-municipios.mjs")
+          echo "SITE_HTTP=$status GEO_HTTP=$geo GEO_BYTES=$(wc -c < /tmp/evolution-geo)"
+          test "$status" = 200
+          test "$geo" = 200
+          grep -q assessMunicipalityRadius /tmp/evolution-geo
+      - name: Verificar versao publica Cloudflare sem credenciais
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORKER=https://evolution-radar-search.tsvalencio.workers.dev/health
+          status=$(curl -L --max-time 20 -sS -o /tmp/evolution-worker -w '%{http_code}' "$WORKER")
+          echo "WORKER_HTTP=$status"
+          head -c 1500 /tmp/evolution-worker
+          echo
+          test "$status" = 200
+          grep -q '"service":"Evolution Radar IA"' /tmp/evolution-worker
