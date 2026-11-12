@@ -8,7 +8,7 @@ import {openTeam} from "./team-client.js";
 import {DEFAULT_PERMISSIONS,PERMISSION_NAMES} from "./team-roles.mjs";
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const LOCAL="evolution-radar-ia-local-v1",THEME="evolution-radar-ia-theme";
-const state={filters:{...emptyFilters},leads:[],history:[],mode:"local",firebase:null,user:null,remoteReady:false,team:null,teamInfo:null,sharedLeads:[],sharedHistory:[],requests:[],members:[],audit:[]};
+const state={filters:{...emptyFilters},leads:[],history:[],mode:"local",firebase:null,user:null,remoteReady:false,team:null,teamInfo:null,sharedLeads:[],sharedHistory:[],requests:[],members:[],audit:[],accountDeletionReady:false};
 const labels={purchase:"compra",resale:"revenda",transport:"transporte",documents:"documentos",repairs:"reparos",labor:"mão de obra",taxes:"taxas",commissions:"comissões",other:"outros custos"};
 let toastTimer,saveQueue=Promise.resolve(),latestDiscovered=[],lastDiscoveryFilters=null;
 const esc=x=>String(x??"").replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
@@ -33,6 +33,25 @@ function permissionsEditor(perms,uid){
   return '<div class="team-permissions">'+PERMISSION_NAMES.map(p=>
     '<label><input type="checkbox" data-perm="'+p+'" '+(perms?.[p]===true?'checked':'')+'> '+
     esc({view:"Visualizar",search:"Pesquisar",create:"Cadastrar",edit:"Editar",delete:"Arquivar"}[p])+'</label>').join("")+'</div>';
+}
+async function checkAccountDeletionService(){
+  // O botão só aparece quando a versão correta do Worker informa credencial presente.
+  // Qualquer erro/timeout falha fechado, sem simular exclusão de contas.
+  state.accountDeletionReady=false;
+  if(!searchWorkerUrl)return;
+  try{
+    const controller=new AbortController();
+    const timeout=setTimeout(()=>controller.abort(),7000);
+    let res;
+    try{res=await fetch(new URL("/health",searchWorkerUrl),{cache:"no-store",signal:controller.signal});}
+    finally{clearTimeout(timeout);}
+    if(!res.ok)return;
+    const data=await res.json();
+    state.accountDeletionReady=data?.version==="2026-11-12.4"&&
+      data?.accountDeletionConfigured===true&&
+      Array.isArray(data.capabilities)&&data.capabilities.includes("account-deletion");
+  }catch{state.accountDeletionReady=false;}
+  finally{renderTeamPanel();}
 }
 function renderTeamPanel(){
   const auth=!!state.user,owner=isOwner(),info=state.teamInfo;
@@ -62,7 +81,7 @@ function renderTeamPanel(){
       esc(r.createdAt?new Date(r.createdAt).toLocaleString("pt-BR"):"Data não informada")+'</div>'+
     '<div class="actions"><button class="btn primary small" data-uid="'+esc(r.id)+'" data-team-action="approve">Aprovar com permissões iniciais</button>'+
     '<button class="btn secondary small" data-uid="'+esc(r.id)+'" data-team-action="reject">Recusar</button>'+
-    '<button class="btn small team-danger" data-uid="'+esc(r.id)+'" data-team-action="delete">Excluir usuário</button></div></article>').join(""):
+    (state.accountDeletionReady?'<button class="btn small team-danger" data-uid="'+esc(r.id)+'" data-team-action="delete">Excluir usuário</button>':"")+'</div></article>').join(""):
     '<p class="micro">Não há solicitações pendentes.</p>';
   $("#adminMembers").innerHTML=state.members.length?state.members.map(m=>
     '<article class="team-entry" data-member="'+esc(m.id)+'"><h3>'+esc(m.name||"Colaborador")+'</h3>'+
@@ -73,7 +92,7 @@ function renderTeamPanel(){
     (m.status==="approved"?'<button class="btn small" data-uid="'+esc(m.id)+'" data-team-action="suspend">Suspender</button>':
       '<button class="btn small" data-uid="'+esc(m.id)+'" data-team-action="activate">Reativar</button>')+
     '<button class="btn small" data-uid="'+esc(m.id)+'" data-team-action="revoke">Revogar acesso</button>'+
-    '<button class="btn small team-danger" data-uid="'+esc(m.id)+'" data-team-action="delete">Excluir usuário</button></div></article>').join(""):
+    (state.accountDeletionReady?'<button class="btn small team-danger" data-uid="'+esc(m.id)+'" data-team-action="delete">Excluir usuário</button>':"")+'</div></article>').join(""):
     '<p class="micro">Nenhum colaborador aprovado.</p>';
   $("#adminAudit").innerHTML=state.audit.length?state.audit.slice(0,30).map(x=>
     '<div class="team-entry"><span class="meta">'+
@@ -458,6 +477,7 @@ function calculate(e){
 }
 function theme(){const current=document.documentElement.dataset.theme||"dark",next=current==="dark"?"light":"dark";document.documentElement.dataset.theme=next;localStorage.setItem(THEME,next);}
 async function deleteTeamUser(uid){
+  if(!state.accountDeletionReady)return notice("Exclusão definitiva ainda não está habilitada no servidor.");
   if(!isOwner()||!state.team||!state.user)return notice("Somente o administrador pode excluir contas.");
   const record=state.members.find(x=>x.id===uid)||state.requests.find(x=>x.id===uid);
   if(!record)return notice("Usuário não encontrado no cadastro da equipe.");
@@ -593,6 +613,7 @@ async function boot(){
   const local=localRead();state.filters=local.filters;state.leads=local.leads;
   try{document.documentElement.dataset.theme=localStorage.getItem(THEME)==="light"?"light":"dark";}catch{}
   setForm($("#filterForm"),state.filters);bind();renderAll();
+  void checkAccountDeletionService();
   $("#autoSearchState").textContent=searchWorkerUrl?"Conector disponível":"Conector gratuito ainda não configurado";
   const configured=!!firebaseConfig?.apiKey&&!!firebaseConfig?.projectId&&!!firebaseConfig?.databaseURL;
   if(configured){
