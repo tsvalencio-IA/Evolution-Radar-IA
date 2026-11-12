@@ -17,7 +17,7 @@ export async function openTeam(config,callbacks={}){
   let user=null,member=null,request=null,status="signed-out",listeners=[],shared=[];
   const owner=()=>user?.uid===workspaceConfig.ownerUid;
   const allowed=action=>owner()||(status==="approved"&&canAccess(member,action));
-  const emit=()=>call("onAccess",{status,member,request,isOwner:owner(),
+  const emit=()=>call("onAccess",{status,member,request,isOwner:owner(),emailVerified:owner()?true:user?.emailVerified===true,
     permissions:owner()?full:normalizePermissions(member?.permissions)});
   const stop=arr=>{arr.forEach(unsub=>unsub());arr.length=0;};
   const sub=(ref,fn,arr=listeners)=>arr.push(api.onValue(ref,s=>fn(s.val()),e=>call("onError",e)));
@@ -43,7 +43,8 @@ export async function openTeam(config,callbacks={}){
     }else{
       sub(api.ref(db,"registrationRequests/"+u.uid),v=>{request=v;emit()});
       sub(api.ref(db,ROOT+"/members/"+u.uid),v=>{
-        member=v||null;status=["approved","suspended","revoked"].includes(v?.status)?v.status:"pending";
+        member=v||null;status=v?.status==="approved"?(user?.emailVerified?"approved":"email-unverified"):
+          ["suspended","revoked"].includes(v?.status)?v.status:"pending";
         emit();sharedWatch();
       });
     }
@@ -52,6 +53,12 @@ export async function openTeam(config,callbacks={}){
   return {
     signup:(name,email,password)=>signupRequest(config,name,email,password),
     requestApproval:name=>requestAccess(app,auth,api,name),
+    resendVerification:async()=>{if(!auth.currentUser)throw Error("Faça login primeiro.");await authAPI.sendEmailVerification(auth.currentUser);},
+    refreshVerification:async()=>{if(!auth.currentUser)throw Error("Faça login primeiro.");await authAPI.reload(auth.currentUser);
+      user=auth.currentUser;
+      status=owner()?"approved":member?.status==="approved"?(user.emailVerified?"approved":"email-unverified"):
+        ["suspended","revoked"].includes(member?.status)?member.status:"pending";
+      emit();sharedWatch();return user.emailVerified===true;},
     adminAction:(uid,action,permissions,name)=>manageMember({...ctx(),uid,action,permissions,name}),
     reject:uid=>rejectRequest({...ctx(),uid}),
     saveLead:lead=>saveSharedLead({...ctx(),lead}),
