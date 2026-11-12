@@ -1,4 +1,5 @@
-import {municipalityFromLocationText,assessMunicipalityRadius} from "../public/br-municipios.mjs";
+import {assessMunicipalityRadius} from "../public/br-municipios.mjs";
+import {parseListingFacts,vehicleMatches} from "../public/listing-facts.mjs";
 /* Evolution Radar IA — Cloudflare Worker
  * Implantação pelo painel da Cloudflare, sem terminal.
  * Segredos obrigatórios no Worker (Settings > Variables and Secrets):
@@ -123,52 +124,20 @@ function marketplace(url){
   return "NaPista";
 }
 function normalized(v){return String(v??"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/\s+/g," ").trim();}
-function numeric(v){
-  let s=String(v??"").replace(/[^\d.,]/g,"");
-  if(!s)return null;
-  if(s.includes(",")&&s.includes("."))s=s.replace(/\./g,"").replace(",",".");
-  else if(s.includes(","))s=s.replace(",",".");
-  else if(/^\d{1,3}(\.\d{3})+$/.test(s))s=s.replace(/\./g,"");
-  const n=Number(s);return Number.isFinite(n)&&n>=0?n:null;
-}
-function uniqueNumber(matches){
-  const entries=matches.map(m=>numeric(m[1])).filter(n=>n!==null);
-  const distinct=[...new Set(entries)];
-  return distinct.length===1?distinct[0]:null;
-}
 export function parseFacts(page,title,f){
-  const t=String(page??"").slice(0,6500);
-  const price=uniqueNumber([
-    ...t.matchAll(/(?:pre[cç]o|valor(?:\s+total)?|à vista|a vista)\s*[:\n-]?\s*R\$\s*([\d.,]+)/gi),
-    ...t.matchAll(/R\$\s*([\d.,]+)\s*(?:a vista|à vista)/gi)
-  ]);
-  const km=uniqueNumber([
-    ...t.matchAll(/(?:quilometragem|km rodados|hod[oô]metro|km)\s*[:\n-]?\s*([\d.,]+)\s*(?:km)?\b/gi),
-    ...t.matchAll(/\b([\d.,]+)\s*km(?:\s+rodados)?\b/gi)
-  ]);
-  const yearPairs=[...t.matchAll(/\b((?:19|20)\d{2})\s*\/\s*((?:19|20)\d{2})\b/g)].map(m=>m[1]+"/"+m[2]);
-  const uniqueYears=[...new Set(yearPairs)];
-  const match=uniqueYears.length===1?uniqueYears[0].split("/").map(Number):null;
-  // Só usar localização explicitamente identificada na página, nunca copiá-la dos filtros.
-  const place=municipalityFromLocationText(t);
-  const geo=place?assessMunicipalityRadius(f,place.name,place.uf):null;
-  return {
-    price,km,yearMake:match?match[0]:null,yearModel:match?match[1]:null,
-    city:place?.name??null,uf:place?.uf??null,
-    distanceKm:geo?.distanceKm??null,distanceMethod:geo?.method??null
-  };
+  return parseListingFacts(page,f);
 }
 export function gradeListing(item,f){
   const found=item.fields||{},title=normalized(item.title),reject=[],pending=[];
-  const contains=v=>title.includes(normalized(v));
-  if(f.brand&&!contains(f.brand))pending.push("Marca não comprovada no título");
-  if(f.model&&!normalized(f.model).split(" ").every(w=>title.includes(w))){
+  const vehicle=vehicleMatches(item,f);
+  if(!vehicle.brand)pending.push("Marca não comprovada no anúncio");
+  if(!vehicle.model){
     const expected=normalized(f.model).match(/^([a-z]+)\s*(\d{2,4})$/);
     const observed=expected&&title.match(new RegExp("\\b"+expected[1]+"\\s*(\\d{2,4})\\b"));
     if(observed&&observed[1]!==expected[2])reject.push("Cilindrada/modelo incompatível");
     else pending.push("Modelo exato não comprovado");
   }
-  if(f.version&&!contains(f.version)){
+  if(!vehicle.version){
     if(/\b(fan|start|titan|cargo)\b/.test(title))reject.push("Versão aparentemente diferente");
     else pending.push("Versão não comprovada");
   }
@@ -454,7 +423,7 @@ async function deleteRegisteredUser(payload,token,env){
 export default {
   async fetch(request,env){
     if(request.method==="GET"&&new URL(request.url).pathname==="/health")
-      return response({service:"Evolution Radar IA",version:"2026-11-12.4",capabilities:["search","interpret","municipal-radius","account-deletion"],radiusMethod:"approximate-municipal-centers",status:"online",aiBinding:env.AI?.run?"connected":"missing",aiInference:"not-tested-by-health",accountDeletionConfigured:!!env.FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON});
+      return response({service:"Evolution Radar IA",version:"2026-11-12.5",capabilities:["search","interpret","municipal-radius","account-deletion"],radiusMethod:"approximate-municipal-centers",status:"online",aiBinding:env.AI?.run?"connected":"missing",aiInference:"not-tested-by-health",accountDeletionConfigured:!!env.FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON});
     if(request.method==="OPTIONS")return new Response(null,{status:204,headers:cors});
     const endpoint=new URL(request.url).pathname;
     if(!["/search","/interpret","/admin/delete-user"].includes(endpoint)||request.method!=="POST")return response({error:"Endpoint inexistente"},404);
@@ -474,7 +443,7 @@ export default {
     // Limite de consumo: cada consulta faz até 3 buscas básicas e até 5 extrações básicas.
     // Repetições no mesmo isolate dentro de 10 min usam cache após validar Firebase.
     const f=payload.filters;
-    const cacheKey=JSON.stringify([f.brand,f.model,f.version,f.yearFrom,f.yearTo,f.priceMin,f.priceMax,f.kmMax,f.originCity,f.uf,f.radiusKm,f.sellerType]);
+    const cacheKey=JSON.stringify([f.brand,f.model,f.version,f.yearType,f.yearFrom,f.yearTo,f.priceMin,f.priceMax,f.kmMax,f.originCity,f.uf,f.radiusKm,f.sellerType]);
     const entry=searchMemory.get(cacheKey);
     if(entry&&Date.now()-entry.time<600000)return response({...entry.data,cache:true});
     try{

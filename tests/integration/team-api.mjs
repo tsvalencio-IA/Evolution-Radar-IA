@@ -67,3 +67,10 @@ test("suspensão bloqueia leitura no Firebase imediatamente",async()=>{
  await manageMember({db:ownerDb,api,user:owner,uid:user.uid,action:"suspend"});
  await assert.rejects(()=>api.get(api.ref(memberDb,root+"/leads")),/permission[ _]denied/i);
 });
+test("renomear ou salvar permissões mantém suspensão e regras continuam negando acesso",async()=>{
+ for(const action of ["rename","permissions"]){
+  await manageMember({db:ownerDb,api,user:owner,uid:user.uid,action,name:"Colaborador atualizado",permissions:readonly});
+  assert.equal((await api.get(api.ref(ownerDb,root+"/members/"+user.uid))).val().status,"suspended");
+  await assert.rejects(()=>api.get(api.ref(memberDb,root+"/leads")),/permission[ _]denied/i);
+ }
+});

@@ -32,7 +32,7 @@ const byName=new Map();
 for(const point of byKey.values()){
  const key=normalizeMunicipalityName(point.name);
  const existing=byName.get(key);
- if(!existing)byName.set(key,point);
+ if(!byName.has(key))byName.set(key,point);
  else byName.set(key,null);
 }
 export function resolveMunicipality(name,uf=""){
@@ -43,16 +43,30 @@ export function resolveMunicipality(name,uf=""){
  return byName.get(normalized)||null;
 }
 export function municipalityFromLocationText(content){
- const source=String(content??"");
- // Somente campos explícitos de localização: menções soltas e termos da busca NÃO são prova.
- const matches=source.matchAll(/(?:^|[\n\r|])\s*(?:localiza(?:ç|c)(?:ão|ao)|cidade|munic[ií]pio)\s*[:\-]\s*([^\n\r|]{3,110})/gmi);
- for(const match of matches){
-   const line=match[1].trim();
-   const located=line.match(/^([\p{L}\p{M} .'-]{2,85}?)\s*(?:,|\/|\s[-–]\s)\s*([A-Za-z]{2})(?:\b|$)/u);
-   const found=located?resolveMunicipality(located[1],located[2]):resolveMunicipality(line);
-   if(found)return found;
+ // O campo de localização da OLX vem em várias linhas, com bairro antes da cidade.
+ // Links/Markdown são apenas formatação; nunca procurar a cidade no pedido de busca.
+ const source=String(content??"").replace(/\[([^\]]+)\]\([^)]*\)/g,"$1")
+   .replace(/^[ \t]*#{1,6}[ \t]+/gm,"").replace(/[*_]/g,"");
+ const found=new Map();
+ const labels=source.matchAll(/(?:^|[\n\r|])[ \t]*(?:localiza(?:ç|c)(?:ão|ao)|cidade|munic[ií]pio)[ \t]*(?:[:\-][ \t]*|\r?\n[ \t]*)/gmi);
+ for(const match of labels){
+   const block=source.slice(match.index+match[0].length).split(/\r?\n/)
+     .filter(x=>x.trim()).slice(0,3).join(" ").slice(0,300).trim();
+   const located=block.match(/^(.{2,160}?)\s*(?:,|\/|\s[-–]\s)\s*([A-Za-z]{2})(?=\s|,|$)/u);
+   let point=null;
+   if(located){
+     const words=normalizeMunicipalityName(located[1]).split(" ");
+     // A cidade é o sufixo do endereço explicitamente rotulado; não usar bairro como cidade.
+     for(let offset=0;offset<words.length&&!point;offset++)
+       point=resolveMunicipality(words.slice(offset).join(" "),located[2]);
+   }else{
+     const line=source.slice(match.index+match[0].length).split(/\r?\n/).find(x=>x.trim());
+     point=resolveMunicipality(line);
+   }
+   if(point)found.set(point.uf+"|"+point.name,point);
  }
- return null;
+ // Localizações conflitantes permanecem não comprovadas.
+ return found.size===1?[...found.values()][0]:null;
 }
 export function municipalityDistanceKm(a,b){
  if(!a||!b)return null;

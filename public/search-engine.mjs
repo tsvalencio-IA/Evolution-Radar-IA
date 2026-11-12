@@ -1,4 +1,5 @@
-import {assessMunicipalityRadius,normalizeMunicipalityName} from "./br-municipios.mjs";
+import {assessMunicipalityRadius} from "./br-municipios.mjs";
+import {vehicleMatches} from "./listing-facts.mjs";
 // Pesquisa externa: resultados INDEXADOS nunca equivalem a anúncio individual verificado.
 const SOURCES = [
   {name:"OLX",domains:["olx.com.br"]},
@@ -75,7 +76,10 @@ export function normalizeWebLeads(raw){
       return typeof v==="number"&&Number.isFinite(v)&&v>=0?v:null;
     };
     const fields={
-      price:numeric("price"),km:numeric("km"),yearMake:numeric("yearMake"),yearModel:numeric("yearModel"),
+      price:numeric("price"),km:numeric("km"),yearMake:numeric("yearMake"),yearModel:numeric("yearModel"),yearAdvertised:numeric("yearAdvertised"),
+      brand:typeof raw.brand==="string"?raw.brand.slice(0,100):null,
+      model:typeof raw.model==="string"?raw.model.slice(0,110):null,
+      version:typeof raw.version==="string"?raw.version.slice(0,100):null,
       city:typeof raw.city==="string"?raw.city.slice(0,110):null,
       uf:typeof raw.uf==="string"?raw.uf.slice(0,2):null
     };
@@ -98,12 +102,6 @@ export function classifyDiscoveryForFilters(item,filters={}){
   if(!item||item.pageType!=="individual-candidate")return {category:"catalog",distanceKm:null};
   const f=item.fields||{};
   const area=assessMunicipalityRadius(filters,f.city,f.uf);
-  if(area.status==="outside")return {category:"out-of-area",distanceKm:area.distanceKm};
-  if(area.status!=="inside")return {category:"location-unverified",distanceKm:null};
-  const title=normalizeMunicipalityName(item.title).replace(/([A-Z])(?=\d)/g,"$1 ").replace(/(\d)(?=[A-Z])/g,"$1 ");
-  const matchField=value=>!value||title.includes(normalizeMunicipalityName(value).replace(/([A-Z])(?=\d)/g,"$1 "));
-  if(!matchField(filters.brand)||!matchField(filters.model)||!matchField(filters.version))
-    return {category:"model-unverified",distanceKm:area.distanceKm};
   const year=Number(filters.yearType==="make"?f.yearMake:f.yearModel);
   if((f.yearModel!==null&&f.yearModel!==undefined&&filters.yearType!=="make")||(f.yearMake!==null&&f.yearMake!==undefined&&filters.yearType==="make")){
     if((filters.yearFrom&&year<Number(filters.yearFrom))||(filters.yearTo&&year>Number(filters.yearTo)))
@@ -115,5 +113,22 @@ export function classifyDiscoveryForFilters(item,filters={}){
     if((lower&&v<Number(lower))||(upper&&v>Number(upper)))
       return {category:"outside-filters",distanceKm:area.distanceKm};
   }
+  if(area.status==="outside")return {category:"out-of-area",distanceKm:area.distanceKm};
+  if(area.status!=="inside")return {category:"location-unverified",distanceKm:null};
+  const vehicle=vehicleMatches(item,filters);
+  if(!vehicle.brand||!vehicle.model||!vehicle.version)
+    return {category:"model-unverified",distanceKm:area.distanceKm};
   return {category:"in-area",distanceKm:area.distanceKm};
+}
+
+// Dados incompletos continuam investigáveis, sem serem anunciados como dentro do raio.
+export function partitionDiscovery(items,filters){
+  const matched=[],unresolved=[],excluded=[];
+  for(const item of items){
+    const entry={item,region:classifyDiscoveryForFilters(item,filters)};
+    if(item.assessment?.bucket==="outside"||["catalog","out-of-area","outside-filters"].includes(entry.region.category))excluded.push(entry);
+    else if(entry.region.category==="in-area")matched.push(entry);
+    else unresolved.push(entry);
+  }
+  return {matched,unresolved,excluded};
 }

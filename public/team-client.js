@@ -56,6 +56,8 @@ export async function openTeam(config,callbacks={}){
     requestApproval:name=>requestAccess(app,auth,api,name),
     resendVerification:async()=>{if(!auth.currentUser)throw Error("Faça login primeiro.");await authAPI.sendEmailVerification(auth.currentUser);},
     refreshVerification:async()=>{if(!auth.currentUser)throw Error("Faça login primeiro.");await authAPI.reload(auth.currentUser);
+      // Regras e Worker recebem email_verified no ID token; reload sozinho não o renova.
+      await auth.currentUser.getIdToken(true);
       user=auth.currentUser;
       status=owner()?"approved":member?.status==="approved"?(user.emailVerified?"approved":"email-unverified"):
         ["suspended","revoked"].includes(member?.status)?member.status:"pending";
