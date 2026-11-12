@@ -48,10 +48,10 @@ async function authenticate(token,env){
     ...String(env.ALLOWED_UIDS??"").split(/[,;\s]+/).map(x=>x.trim())
   ].filter(Boolean));
   if(!u||u.disabled||!u.localId)return null;
-  // O administrador e a lista antiga permanecem compatíveis.
-  if(allowed.has(u.localId))return u.localId;
-  // Novos colaboradores são aprovados pelo padrinho no Firebase, não por
-  // alteração de variáveis Cloudflare a cada cadastro.
+  // A conta do padrinho mantém acesso sem depender da nova estrutura.
+  if(u.localId===String(env.ALLOWED_UID??"").trim())return u.localId;
+  // A autorização da equipe vem da base; a revogação sempre prevalece
+  // sobre listas antigas (ALLOWED_UIDS não pode contornar uma suspensão).
   const memberUrl="https://evolution-radar-ia-default-rtdb.firebaseio.com/"+
     "workspaces/evolution-motos/members/"+encodeURIComponent(u.localId)+
     ".json?auth="+encodeURIComponent(token);
@@ -62,8 +62,11 @@ async function authenticate(token,env){
     finally{clearTimeout(timer);}
     if(!membership.ok)return null;
     const m=await membership.json();
-    if(m?.status!=="approved"||m?.permissions?.search!==true)return null;
-    return u.localId;
+    if(m?.status==="approved"&&m?.permissions?.search===true)return u.localId;
+    if(m)return null;
+    // Compatibilidade com autorizações manuais anteriores, somente se não
+    // existir registro de suspensão/revogação para este UID.
+    return allowed.has(u.localId)?u.localId:null;
   }catch{return null;}
 }
 // Filtra páginas de outros setores ANTES de mostrar resultados e consumir extração.
