@@ -65,5 +65,5 @@ test("somente quem tem delete pode arquivar, sem apagar fisicamente",async()=>{
 });
 test("suspensão bloqueia leitura no Firebase imediatamente",async()=>{
  await manageMember({db:ownerDb,api,user:owner,uid:user.uid,action:"suspend"});
- await assert.rejects(()=>api.get(api.ref(memberDb,root+"/leads")),/permission_denied/i);
+ await assert.rejects(()=>api.get(api.ref(memberDb,root+"/leads")),/permission[ _]denied/i);
 });
