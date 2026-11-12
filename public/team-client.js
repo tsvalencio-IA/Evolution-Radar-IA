@@ -24,7 +24,7 @@ export async function openTeam(config,callbacks={}){
   function sharedWatch(){
     stop(shared);call("onLeads",[]);call("onHistory",[]);
     if(!allowed("view"))return;
-    sub(api.ref(db,ROOT+"/leads"),v=>call("onLeads",list(v).filter(x=>x.archived!==true)),shared);
+    sub(api.ref(db,ROOT+"/leads"),v=>call("onLeads",list(v)),shared);
     const ref=api.query(api.ref(db,ROOT+"/searchHistory"),api.orderByKey(),api.limitToLast(50));
     sub(ref,v=>call("onHistory",list(v).sort((a,b)=>Number(b.createdAt||0)-Number(a.createdAt||0))),shared);
   }
