@@ -1,3 +1,4 @@
+import {assessMunicipalityRadius,normalizeMunicipalityName} from "./br-municipios.mjs";
 // Pesquisa externa: resultados INDEXADOS nunca equivalem a anúncio individual verificado.
 const SOURCES = [
   {name:"OLX",domains:["olx.com.br"]},
@@ -89,4 +90,30 @@ export function normalizeWebLeads(raw){
       extractionStatus:status,fields,assessment
     }];
   });
+}
+
+// Revisão defensiva na interface: protege também contra respostas de Workers antigos
+// e pesquisas armazenadas. Nunca promove catálogo ou município desconhecido a oferta.
+export function classifyDiscoveryForFilters(item,filters={}){
+  if(!item||item.pageType!=="individual-candidate")return {category:"catalog",distanceKm:null};
+  const f=item.fields||{};
+  const area=assessMunicipalityRadius(filters,f.city,f.uf);
+  if(area.status==="outside")return {category:"out-of-area",distanceKm:area.distanceKm};
+  if(area.status!=="inside")return {category:"location-unverified",distanceKm:null};
+  const title=normalizeMunicipalityName(item.title).replace(/([A-Z])(?=\d)/g,"$1 ").replace(/(\d)(?=[A-Z])/g,"$1 ");
+  const matchField=value=>!value||title.includes(normalizeMunicipalityName(value).replace(/([A-Z])(?=\d)/g,"$1 "));
+  if(!matchField(filters.brand)||!matchField(filters.model)||!matchField(filters.version))
+    return {category:"model-unverified",distanceKm:area.distanceKm};
+  const year=Number(filters.yearType==="make"?f.yearMake:f.yearModel);
+  if((f.yearModel!==null&&f.yearModel!==undefined&&filters.yearType!=="make")||(f.yearMake!==null&&f.yearMake!==undefined&&filters.yearType==="make")){
+    if((filters.yearFrom&&year<Number(filters.yearFrom))||(filters.yearTo&&year>Number(filters.yearTo)))
+      return {category:"outside-filters",distanceKm:area.distanceKm};
+  }
+  for(const [field,lower,upper] of [["price",filters.priceMin,filters.priceMax],["km",null,filters.kmMax]]){
+    const v=f[field];
+    if(v===null||v===undefined)continue;
+    if((lower&&v<Number(lower))||(upper&&v>Number(upper)))
+      return {category:"outside-filters",distanceKm:area.distanceKm};
+  }
+  return {category:"in-area",distanceKm:area.distanceKm};
 }
