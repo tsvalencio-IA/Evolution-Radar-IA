@@ -47,8 +47,28 @@ async function authenticate(token,env){
     String(env.ALLOWED_UID??"").trim(),
     ...String(env.ALLOWED_UIDS??"").split(/[,;\s]+/).map(x=>x.trim())
   ].filter(Boolean));
-  if(!u||u.disabled||!allowed.has(u.localId))return null;
-  return u.localId;
+  if(!u||u.disabled||!u.localId)return null;
+  // A conta do padrinho mantém acesso sem depender da nova estrutura.
+  if(u.localId===String(env.ALLOWED_UID??"").trim())return u.localId;
+  if(u.emailVerified!==true)return null;
+  // A autorização da equipe vem da base; a revogação sempre prevalece
+  // sobre listas antigas (ALLOWED_UIDS não pode contornar uma suspensão).
+  const memberUrl="https://evolution-radar-ia-default-rtdb.firebaseio.com/"+
+    "workspaces/evolution-motos/members/"+encodeURIComponent(u.localId)+
+    ".json?auth="+encodeURIComponent(token);
+  try{
+    const control=new AbortController(),timer=setTimeout(()=>control.abort(),6500);
+    let membership;
+    try{membership=await fetch(memberUrl,{signal:control.signal,cache:"no-store"});}
+    finally{clearTimeout(timer);}
+    if(!membership.ok)return null;
+    const m=await membership.json();
+    if(m?.status==="approved"&&m?.permissions?.search===true)return u.localId;
+    if(m)return null;
+    // Compatibilidade com autorizações manuais anteriores, somente se não
+    // existir registro de suspensão/revogação para este UID.
+    return allowed.has(u.localId)?u.localId:null;
+  }catch{return null;}
 }
 // Filtra páginas de outros setores ANTES de mostrar resultados e consumir extração.
 export function relevantMarketplacePage(item){
