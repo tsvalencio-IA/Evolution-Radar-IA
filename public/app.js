@@ -3,6 +3,7 @@ import {firebaseConfig} from "./firebase-config.js";
 import {searchWorkerUrl} from "./search-config.js";
 import {searchQuery,normalizeWebLeads} from "./search-engine.mjs";
 import {openFirebase} from "./firebase-client.js";
+import {parseLocalIntent,mergeIntentFilters} from "./local-intent.mjs";
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const LOCAL="evolution-radar-ia-local-v1",THEME="evolution-radar-ia-theme";
 const state={filters:{...emptyFilters},leads:[],history:[],mode:"local",firebase:null,user:null,remoteReady:false};
@@ -167,38 +168,54 @@ async function assistantSearch(){
   if(state.mode!=="remote"||!state.user){label.textContent="Entre na conta Firebase e aguarde a sincronização antes de pesquisar.";return;}
   if(!searchWorkerUrl){label.textContent="Worker de pesquisa ainda não configurado.";return;}
   button.disabled=true;button.textContent="Interpretando...";
+  let fallback=false;
   try{
-    const base="https://www.gstatic.com/firebasejs/11.10.0/";
-    const [sdkApp,sdkAuth]=await Promise.all([import(base+"firebase-app.js"),import(base+"firebase-auth.js")]);
-    const app=sdkApp.getApps().find(a=>a.options.projectId===firebaseConfig.projectId);
-    const user=app?sdkAuth.getAuth(app).currentUser:null;
-    if(!user)throw Error("Login Firebase necessário.");
-    const controller=new AbortController(),abort=setTimeout(()=>controller.abort(),35000);
-    let res;
+    let interpreted;
     try{
-      res=await fetch(new URL("/interpret",searchWorkerUrl),{
-        method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+await user.getIdToken()},
-        body:JSON.stringify({message:prompt}),signal:controller.signal,cache:"no-store"
-      });
-    }finally{clearTimeout(abort);}
-    const data=await res.json();
-    if(!res.ok)throw Error(String(data?.error||"IA indisponível"));
-    const f={...emptyFilters,...(data.filters||{})};
+      const base="https://www.gstatic.com/firebasejs/11.10.0/";
+      const [sdkApp,sdkAuth]=await Promise.all([import(base+"firebase-app.js"),import(base+"firebase-auth.js")]);
+      const app=sdkApp.getApps().find(a=>a.options.projectId===firebaseConfig.projectId);
+      const user=app?sdkAuth.getAuth(app).currentUser:null;
+      if(!user)throw Error("Login Firebase necessário.");
+      const controller=new AbortController(),abort=setTimeout(()=>controller.abort(),35000);
+      let res;
+      try{
+        res=await fetch(new URL("/interpret",searchWorkerUrl),{
+          method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+await user.getIdToken()},
+          body:JSON.stringify({message:prompt}),signal:controller.signal,cache:"no-store"
+        });
+      }finally{clearTimeout(abort);}
+      const data=await res.json();
+      if(!res.ok)throw Error(String(data?.error||"IA indisponível"));
+      if(!data?.filters||typeof data.filters!=="object")throw Error("A IA não devolveu filtros válidos.");
+      interpreted=data.filters;
+    }catch(e){
+      fallback=true;
+      const local=parseLocalIntent(prompt);
+      if(local.warnings.length){label.textContent="O assistente remoto está indisponível. " + local.warnings.join(" ") + " Nenhuma pesquisa foi iniciada.";return;}
+      if(!local.filters.brand||!local.filters.model){label.textContent="O assistente remoto está indisponível e a interpretação local não reconheceu marca e modelo com segurança. Preencha os filtros manuais; nenhuma pesquisa foi iniciada.";return;}
+      interpreted=local.filters;
+    }
+    if(!interpreted.brand||!interpreted.model){label.textContent="Pedido incompleto: informe marca e modelo exato antes de pesquisar. Nenhuma pesquisa foi iniciada.";return;}
+    const f=mergeIntentFilters(readFilters(),interpreted);
+    const missing=["brand","model","originCity","uf"].filter(k=>!String(f[k]||"").trim());
+    if(missing.length){
+      label.textContent="Complete os campos obrigatórios: "+missing.join(", ")+". O sistema não inventa cidade ou modelo.";
+      setForm($("#filterForm"),f);
+      $("#filterForm").scrollIntoView({behavior:"smooth",block:"start"});
+      return;
+    }
+    if(!validFilters(f)){label.textContent="Os filtros identificados precisam de correção. Nenhuma pesquisa foi feita.";return;}
     setForm($("#filterForm"),f);
     state.filters=f;
     await persist();
     renderAll();
-    const missing=["brand","model","originCity","uf"].filter(k=>!String(f[k]||"").trim());
-    if(missing.length){
-      label.textContent="A IA identificou parte do pedido. Complete os filtros ausentes: "+missing.join(", ")+". Nenhuma consulta externa foi feita.";
-      $("#filterForm").scrollIntoView({behavior:"smooth",block:"start"});
-      return;
-    }
-    if(!validFilters(f)){label.textContent="Filtros interpretados, mas alguns valores precisam de correção. Nenhuma pesquisa foi feita.";return;}
-    label.textContent="Pedido interpretado. Pesquisando anúncios agora; os resultados serão registrados no Firebase.";
+    label.textContent=fallback?"IA remota indisponível. Pedido interpretado por regras locais, sem inventar dados. Pesquisando anúncios...":"Pedido interpretado pela IA. Pesquisando anúncios...";
     await automaticSearch({requestText:prompt});
+    const result=$("#autoSearchState").textContent;
+    label.textContent=(fallback?"Modo alternativo local (sem IA remota). ":"IA remota. ")+result+". Confira os resultados e os filtros; o sistema não confirma a disponibilidade das motos.";
   }catch(e){
-    label.textContent="Interpretação não concluída: "+(e?.message||"erro")+". Os filtros manuais continuam disponíveis.";
+    label.textContent="Não foi possível concluir a pesquisa: "+(e?.message||"erro")+". Verifique os filtros e tente novamente.";
   }finally{button.disabled=false;button.textContent="Interpretar e pesquisar";}
 }
 function enableVoiceInput(){
