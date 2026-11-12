@@ -355,17 +355,45 @@ async function storeLead(e){
   if(state.mode==="loading")return notice("Aguarde a sincronização.");
   const l=readLead();if(!l)return notice("Registro inválido. Confira valores e URL.");
   if(l.evidence==="page"&&!l.url)return notice("Para marcar página declarada conferida, informe seu link individual.");
-  const dupe=findDuplicate(l,state.leads);
+  const existing=allLeads().find(x=>x.id===l.id);
+  const dupe=findDuplicate(l,allLeads().filter(x=>x.id!==l.id));
   if(dupe?.type==="same-url")return notice("Esse link já existe no histórico. Edite o registro existente.");
   if(dupe?.type==="possible-same-bike"&&!confirm("Possível duplicidade: preço, KM, ano e cidade iguais. Registrar mesmo assim?"))return;
-  const idx=state.leads.findIndex(x=>x.id===l.id);
-  if(idx>=0)state.leads[idx]=l;else state.leads.unshift(l);
-  $("#leadDialog").close();await persist();renderAll();switchView("oportunidades");notice("Registro salvo. Disponibilidade e documentação ainda não comprovadas.");
+  try{
+    if(state.user){
+      if(!canUse(existing?"edit":"create"))return notice("Permissão insuficiente para esta operação.");
+      if(!state.team)throw Error("A base compartilhada ainda não foi carregada.");
+      if(existing&&!existing._shared&&isOwner()){
+        const idx=state.leads.findIndex(x=>x.id===l.id);
+        if(idx<0)throw Error("Registro original não encontrado.");
+        state.leads[idx]=l;await persist();
+      }else{
+        await state.team.saveLead(l);
+      }
+    }else{
+      const idx=state.leads.findIndex(x=>x.id===l.id);
+      if(idx>=0)state.leads[idx]=l;else state.leads.unshift(l);
+      await persist();
+    }
+    $("#leadDialog").close();renderAll();switchView("oportunidades");
+    notice("Registro salvo. Disponibilidade e documentação ainda não comprovadas.");
+  }catch(err){notice("Não foi possível salvar: "+(err?.message||"erro"));}
 }
 async function removeLead(id){
   if(state.mode==="loading")return notice("Aguarde a sincronização.");
-  if(!confirm("Excluir este registro? Faça backup se desejar preservar o histórico."))return;
-  state.leads=state.leads.filter(x=>x.id!==id);await persist();renderAll();notice("Registro excluído.");
+  const existing=allLeads().find(x=>x.id===id);
+  if(!existing)return notice("Registro não encontrado.");
+  if(state.user&&!canUse("delete"))return notice("Somente pessoas autorizadas podem arquivar.");
+  if(!confirm(existing._shared?"Arquivar este registro compartilhado? Ele não será apagado fisicamente.":"Excluir este registro antigo? Faça backup se desejar preservá-lo."))return;
+  try{
+    if(state.user&&existing._shared){
+      await state.team.archiveLead(id);notice("Registro compartilhado arquivado.");
+    }else if(!state.user||isOwner()){
+      state.leads=state.leads.filter(x=>x.id!==id);
+      await persist();notice("Registro antigo excluído.");
+    }else throw Error("Operação não autorizada.");
+    renderAll();
+  }catch(err){notice("Não foi possível arquivar: "+(err?.message||"erro"));}
 }
 function download(name,content,mime){
   const blob=new Blob([content],{type:mime}),url=URL.createObjectURL(blob),a=document.createElement("a");
@@ -382,8 +410,15 @@ async function importJson(e){
     const imported=data.leads.map(sanitizeLead).filter(Boolean);
     if(!confirm("Importar "+imported.length+" registros válidos, sem apagar os existentes?"))return;
     let added=0;
-    for(const lead of imported){if(state.leads.some(x=>x.id===lead.id)||findDuplicate(lead,state.leads)?.type==="same-url")continue;state.leads.push(lead);added++;}
-    await persist();renderAll();notice(added+" registro(s) importado(s). Registros existentes preservados.");
+    if(state.user&&!canUse("create"))throw Error("Seu perfil não permite cadastrar registros.");
+    for(const lead of imported){
+      if(allLeads().some(x=>x.id===lead.id)||findDuplicate(lead,allLeads())?.type==="same-url")continue;
+      if(state.user){await state.team.saveLead(lead);}
+      else state.leads.push(lead);
+      added++;
+    }
+    if(!state.user)await persist();
+    renderAll();notice(added+" registro(s) importado(s). Registros existentes preservados.");
   }catch(err){notice("Não foi possível importar: "+(err.message||"arquivo inválido"));}
 }
 function calculate(e){
