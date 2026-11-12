@@ -50,7 +50,7 @@ function renderTeamPanel(){
     info?.status==="pending"?"Seu cadastro está aguardando aprovação do padrinho. Nenhuma pesquisa ou base compartilhada está liberada.":"";
   warning.hidden=!pending;warning.textContent=msg;
   status.hidden=!pending;status.textContent=msg;
-  $("[data-view]").forEach(b=>{if(b.id!=="adminNav"&&b.dataset.view!=="config")b.hidden=pending;});
+  $$("[data-view]").forEach(b=>{if(b.id!=="adminNav"&&b.dataset.view!=="config")b.hidden=pending;});
   if(pending&&!$("#view-config").classList.contains("active"))switchView("config");
   $("#teamSetupStatus").textContent=owner?
     "O controle de acesso depende das regras do Firebase publicadas. Cadastro, aprovação e revogação são aplicados imediatamente quando a sincronização está ativa.":
