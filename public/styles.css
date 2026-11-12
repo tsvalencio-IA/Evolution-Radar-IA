@@ -46,3 +46,5 @@ footer{display:flex;justify-content:space-between;gap:10px;border-top:1px solid 
 .suppressed-entry strong{flex:1 1 200px;min-width:0;overflow-wrap:anywhere}
 .suppressed-entry span{color:var(--muted)}
 .suppressed-entry a{margin-left:auto}
+
+.team-danger{color:var(--bad);border-color:var(--bad);background:transparent}.team-danger:hover{background:var(--surface2)}
