@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
-import {facebookListingUrl,facebookMarketplaceSearch} from "../public/marketplaces.mjs";
+import {facebookListingUrl,facebookMarketplaceSearch,facebookSharedListing} from "../public/marketplaces.mjs";
 import {canonicalUrl,sourceSearches,isListingOrSearchUrl} from "../public/core.mjs";
 import {classifySearchPage,normalizeWebLeads} from "../public/search-engine.mjs";
 const filters={brand:"Yamaha",model:"Factor 125",yearFrom:"2012",yearTo:"2012",originCity:"São José do Rio Preto",uf:"SP",radiusKm:"50"};
@@ -37,4 +37,20 @@ test("cadastro Facebook preenche somente fonte/link e mantém os dados da moto e
  const app=readFileSync(new URL("../public/app.js",import.meta.url),"utf8");
  assert.match(app,/source:"Facebook Marketplace",url,evidence:"provided"/);
  assert.match(app,/brand:"",model:"",version:"",city:"",uf:"",yearMake:"",yearModel:"",price:"",km:""/);
+});
+
+test("PWA pode receber link individual público do Facebook por compartilhamento Android",()=>{
+ const params=new URLSearchParams({ "share-target":"facebook",title:"Yamaha Factor",
+  text:"Olhe esta moto: https://m.facebook.com/marketplace/item/123456789012345/?ref=share"});
+ assert.equal(facebookSharedListing("?"+params),"https://www.facebook.com/marketplace/item/123456789012345/");
+ assert.equal(facebookSharedListing("?share-target=facebook&url="+encodeURIComponent("https://facebook.com/marketplace/item/123456789012345/")),"https://www.facebook.com/marketplace/item/123456789012345/");
+ assert.equal(facebookSharedListing("?url="+encodeURIComponent("https://facebook.com/marketplace/item/123456789012345/")),"");
+ assert.equal(facebookSharedListing("?share-target=facebook&url="+encodeURIComponent("https://facebook.com.evil.example/marketplace/item/123456789012345/")),"");
+ assert.equal(facebookSharedListing("?share-target=facebook&url="+encodeURIComponent("https://www.facebook.com/share/abc")),"");
+ const manifest=JSON.parse(readFileSync(new URL("../public/manifest.webmanifest",import.meta.url),"utf8"));
+ assert.equal(manifest.share_target.method,"GET");
+ assert.match(manifest.share_target.action,/share-target=facebook/);
+ const app=readFileSync(new URL("../public/app.js",import.meta.url),"utf8");
+ assert.match(app,/facebookSharedListing\(location\.search\)/);
+ assert.match(app,/Link individual do Facebook recebido/);
 });
