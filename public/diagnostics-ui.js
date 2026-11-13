@@ -81,8 +81,10 @@ $("#diagnosticForm").addEventListener("submit",async event=>{
 });
 $("#copyDiagnostic").addEventListener("click",async()=>{
   const text=formatDiagnosticReport(latest);
+  // Deixa o texto acessível também quando o navegador não sincroniza a área de transferência.
+  $("#reportFallback").hidden=false;$("#reportText").value=text;
   try{await navigator.clipboard.writeText(text);$("#diagnosticStatus").textContent="Relatório copiado";}
-  catch{$("#reportFallback").hidden=false;$("#reportText").value=text;$("#reportText").focus();$("#reportText").select();}
+  catch{$("#reportText").focus();$("#reportText").select();$("#diagnosticStatus").textContent="Selecione e copie o relatório abaixo";}
 });
 $("#downloadDiagnostic").addEventListener("click",()=>{
   const url=URL.createObjectURL(new Blob([JSON.stringify(latest,null,2)],{type:"application/json"})),a=document.createElement("a");
