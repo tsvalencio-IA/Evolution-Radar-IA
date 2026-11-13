@@ -1,6 +1,6 @@
 // Sinais comerciais na descrição acessível de um anúncio.
 // NÃO substitui histórico veicular oficial nem atesta ausência de ocorrências.
-const normalized=value=>String(value??"").normalize("NFD").replace(/[\u0300-\u036f]/g,"")
+const normalizeRiskText=value=>String(value??"").normalize("NFD").replace(/[\u0300-\u036f]/g,"")
   .toLowerCase().replace(/\s+/g," ").trim().slice(0,12000);
 const rules={
   auction:{
@@ -32,7 +32,7 @@ export const REPORTED_RISK_REASONS=Object.freeze({
   restriction:"O anúncio declara restrição ou impedimento (sem verificação oficial)"
 });
 export function assessAdvertisedRisks(content){
-  const text=normalized(String(content??"").split(/(?:^|\n)\s*(?:an[uú]ncios relacionados|veja tamb[eé]m|motos similares|recomendados para voc[eê])/i)[0]);
+  const text=normalizeRiskText(String(content??"").split(/(?:^|\n)\s*(?:an[uú]ncios relacionados|veja tamb[eé]m|motos similares|recomendados para voc[eê])/i)[0]);
   return Object.fromEntries(Object.entries(rules).map(([key,rule])=>{
     // Retira negações ANTES de procurar afirmações positivas. Uma negação não
     // equivale a certidão limpa: continua sem validação independente.
