@@ -6,7 +6,7 @@ import {openFirebase} from "./firebase-client.js";
 import {parseLocalIntent,mergeIntentFilters} from "./local-intent.mjs";
 import {openTeam} from "./team-client.js";
 import {DEFAULT_PERMISSIONS,PERMISSION_NAMES} from "./team-roles.mjs";
-import {facebookListingUrl,facebookMarketplaceSearch} from "./marketplaces.mjs";
+import {facebookListingUrl,facebookMarketplaceSearch,facebookSharedListing} from "./marketplaces.mjs";
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const LOCAL="evolution-radar-ia-local-v1",THEME="evolution-radar-ia-theme";
 const state={filters:{...emptyFilters},leads:[],history:[],mode:"local",firebase:null,user:null,remoteReady:false,team:null,teamInfo:null,sharedLeads:[],sharedHistory:[],requests:[],members:[],audit:[],accountDeletionReady:false};
@@ -681,5 +681,13 @@ async function boot(){
   }
   if("serviceWorker" in navigator && location.protocol==="https:")navigator.serviceWorker.register("./sw.js").catch(()=>{});
   const hash=location.hash.slice(1);if(["pesquisa","oportunidades","analise","config"].includes(hash))switchView(hash);
+  const incoming=facebookSharedListing(location.search);
+  if(incoming){
+    switchView("pesquisa");
+    $("#facebookListingUrl").value=incoming;
+    $("#facebookMarketplacePanel").scrollIntoView({block:"center"});
+    notice("Link individual do Facebook recebido. Confira o anúncio antes de registrar; nenhum dado foi salvo automaticamente.");
+    try{history.replaceState(history.state,"",location.pathname+location.hash);}catch{}
+  }
 }
 boot();
