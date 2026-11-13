@@ -215,3 +215,33 @@ test("resposta vazia da extração conta como falha, não sucesso",async()=>{
   assert.equal(data.items[0].extractionFailureCode,"EXTRACT_EMPTY_CONTENT");
  }finally{globalThis.fetch=prev;}
 });
+
+test("retry avançado só ocorre quando explicitamente autorizado e recupera conteúdo",async()=>{
+ const env={TAVILY_API_KEY:"SECRET_TEST",ALLOWED_UID:"test-user",FIREBASE_WEB_API_KEY:"PUBLIC_TEST",TAVILY_ADVANCED_RETRY:"true"};
+ const f={...filters,priceMax:"17653"};
+ const req=new Request("https://evolution-radar-search.tsvalencio.workers.dev/search",{
+  method:"POST",headers:{Origin:"https://tsvalencio-ia.github.io",Authorization:"Bearer "+"x".repeat(140),"Content-Type":"application/json"},body:JSON.stringify({filters:f})
+ });
+ const original=globalThis.fetch,extractions=[];
+ globalThis.fetch=async(url,options)=>{
+  const u=String(url);
+  if(u.includes("identitytoolkit.googleapis.com"))return Response.json({users:[{localId:"test-user",disabled:false}]});
+  if(u.endsWith("/search"))return Response.json({results:[{title:"Honda CG 160 Titan 2022",url:direct}]});
+  if(u.endsWith("/extract")){
+    const body=JSON.parse(options.body);extractions.push(body.extract_depth);
+    if(body.extract_depth==="basic")return Response.json({results:[],failed_results:[{url:direct,error:"access failed"}]});
+    return Response.json({results:[{url:direct,raw_content:sample}],failed_results:[]});
+  }
+  return Response.json({error:"unexpected"},{status:404});
+ };
+ try{
+  const res=await worker.fetch(req,env),result=await res.json();
+  assert.equal(res.status,200);
+  assert.deepEqual(extractions,["basic","advanced"]);
+  assert.equal(result.coverage.advancedRetryAttempted,1);
+  assert.equal(result.coverage.advancedRetrySucceeded,1);
+  assert.equal(result.coverage.extractionSucceeded,1);
+  assert.equal(result.coverage.extractionFailures,0);
+  assert.equal(result.items[0].fields.price,16900);
+ }finally{globalThis.fetch=original;}
+});
