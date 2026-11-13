@@ -1,5 +1,6 @@
 import {assessMunicipalityRadius} from "../public/br-municipios.mjs";
 import {parseListingFacts,vehicleMatches} from "../public/listing-facts.mjs";
+import {assessAdvertisedRisks,REPORTED_RISK_REASONS} from "../public/risk-evidence.mjs";
 /* Evolution Radar IA — Cloudflare Worker
  * Implantação pelo painel da Cloudflare, sem terminal.
  * Segredos obrigatórios no Worker (Settings > Variables and Secrets):
@@ -129,6 +130,9 @@ export function parseFacts(page,title,f){
 }
 export function gradeListing(item,f){
   const found=item.fields||{},title=normalized(item.title),reject=[],pending=[];
+  for(const [key,reason] of Object.entries(REPORTED_RISK_REASONS)){
+    if(item.riskDeclarations?.[key]==="declared-present")reject.push(reason);
+  }
   const vehicle=vehicleMatches(item,f);
   if(!vehicle.brand)pending.push("Marca não comprovada no anúncio");
   if(!vehicle.model){
@@ -273,6 +277,7 @@ async function collect(f,env){
       :null;
     const item={...x,extractionStatus:done?"extracted":wasAttempted?"failed":"not-attempted",
       extractionFailureCode:failureCode,
+      riskDeclarations:done?assessAdvertisedRisks(content):null,
       fields:done?parseFacts(content,x.title,f):{price:null,km:null,yearMake:null,yearModel:null,city:null,uf:null}};
     item.assessment=gradeListing(item,f);
     return item;
