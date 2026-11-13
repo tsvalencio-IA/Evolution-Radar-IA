@@ -1,4 +1,5 @@
 import {assessMunicipalityRadius} from "./br-municipios.mjs";
+import {facebookListingUrl,facebookMarketplaceSearch} from "./marketplaces.mjs";
 export const emptyFilters = Object.freeze({
   brand:"", model:"", version:"", yearFrom:"", yearTo:"", yearType:"model",
   priceMin:"", priceMax:"", kmMax:"", originCity:"", uf:"", radiusKm:"",
@@ -17,6 +18,7 @@ export function canonicalUrl(value) {
   try {
     const u=new URL(String(value).trim());
     if(!["http:","https:"].includes(u.protocol)) return "";
+    const facebook=facebookListingUrl(u.href);if(facebook)return facebook;
     u.hash="";
     for (const key of [...u.searchParams.keys()]) {
       if (/^(utm_|fbclid$|gclid$|igshid$|ref$|source$)/i.test(key)) u.searchParams.delete(key);
@@ -34,6 +36,7 @@ export function isListingOrSearchUrl(value) {
   if(host==="lista.mercadolivre.com.br")return true;
   if(host.endsWith(".olx.com.br")||host==="olx.com.br")return !/[-\/][0-9]{8,}$/.test(path);
   if(host.endsWith(".webmotors.com.br")||host==="webmotors.com.br")return !/\/[0-9]{5,}$/.test(path);
+  if(["facebook.com","www.facebook.com","m.facebook.com","web.facebook.com","mbasic.facebook.com"].includes(host))return !facebookListingUrl(safe);
   return false;
 }
 
@@ -148,7 +151,7 @@ export function sourceSearches(filters) {
     ["Mercado Livre","site:mercadolivre.com.br "+q],
     ["NaPista","site:napista.com.br "+q],
     ["Revendas da região",q+" concessionária revenda"],
-  ].map(([name,query])=>({name,url:"https://www.google.com/search?q="+encodeURIComponent(query)}));
+  ].map(([name,query])=>({name,url:"https://www.google.com/search?q="+encodeURIComponent(query)})).concat(facebookMarketplaceSearch(filters));
 }
 export function money(v) {
   return v===null||v===undefined||v===""?"Não informado":new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL"}).format(Number(v));

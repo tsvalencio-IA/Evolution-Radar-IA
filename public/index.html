@@ -55,10 +55,16 @@
         <div class="actions"><button class="btn primary" type="submit">Aplicar filtros</button><button class="btn secondary" type="button" id="generateSearch">Pesquisar nas fontes</button><button class="btn ghost" type="button" id="resetFilters">Limpar</button></div>
       </form>
       <div id="searchLinks" class="panel" hidden></div>
+      <section class="panel" id="facebookMarketplacePanel">
+        <div class="section-title"><h2>Facebook Marketplace</h2><span>Busca no Facebook</span></div>
+        <p class="micro" id="facebookSearchContext">Abra a busca da moto e confira cidade e raio no Facebook. Depois cole o link individual para investigar no Radar.</p>
+        <div class="actions"><a id="facebookSearchButton" class="btn secondary" href="https://www.facebook.com/marketplace/search/" target="_blank" rel="noopener noreferrer">Pesquisar no Marketplace</a></div>
+        <div class="form-inline"><label>Link do anúncio no Marketplace<input id="facebookListingUrl" type="url" placeholder="https://www.facebook.com/marketplace/item/..."></label><button id="registerFacebookListing" class="btn secondary" type="button">Investigar anúncio no Radar</button></div>
+      </section>
       <div class="panel" id="automaticSearch">
         <div class="section-title"><h2>Pesquisa automática de anúncios</h2><span id="autoSearchState">Conector pendente</span></div>
         
-        <div class="actions"><button class="btn primary" type="button" id="automaticSearchButton">Pesquisar motos agora</button></div>
+        <div class="actions"><button class="btn primary" type="button" id="automaticSearchButton">Pesquisar motos agora</button><a class="btn secondary" id="openDiagnostic" href="./diagnostico.html" target="_blank" rel="noopener">Diagnosticar esta pesquisa</a></div>
         <div id="automaticResults" aria-live="polite"></div>
       </div>
       <div class="panel" id="searchHistoryPanel">

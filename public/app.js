@@ -6,6 +6,7 @@ import {openFirebase} from "./firebase-client.js";
 import {parseLocalIntent,mergeIntentFilters} from "./local-intent.mjs";
 import {openTeam} from "./team-client.js";
 import {DEFAULT_PERMISSIONS,PERMISSION_NAMES} from "./team-roles.mjs";
+import {facebookListingUrl,facebookMarketplaceSearch} from "./marketplaces.mjs";
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const LOCAL="evolution-radar-ia-local-v1",THEME="evolution-radar-ia-theme";
 const state={filters:{...emptyFilters},leads:[],history:[],mode:"local",firebase:null,user:null,remoteReady:false,team:null,teamInfo:null,sharedLeads:[],sharedHistory:[],requests:[],members:[],audit:[],accountDeletionReady:false};
@@ -504,6 +505,22 @@ function bind(){
   $("#themeToggle").addEventListener("click",theme);
   $("#filterForm").addEventListener("submit",async e=>{e.preventDefault();const f=readFilters();if(!validFilters(f))return;state.filters=f;await persist();renderAll();notice("Filtros aplicados ao histórico salvo.");});
   $("#automaticSearchButton").addEventListener("click",()=>automaticSearch());
+  $("#facebookSearchButton").addEventListener("click",event=>{
+    const source=facebookMarketplaceSearch(readFilters());event.currentTarget.href=source.url;
+    $("#facebookSearchContext").textContent="Confira no Facebook: "+(source.location||"cidade de origem")+(source.radiusKm?", raio de "+source.radiusKm+" km":"")+". O link abre os termos da moto; localização e raio dependem dos filtros do Facebook.";
+  });
+  $("#registerFacebookListing").addEventListener("click",()=>{
+    const url=facebookListingUrl($("#facebookListingUrl").value);
+    if(!url)return notice("Cole o link individual completo do Marketplace, com /marketplace/item/ e o número do anúncio.");
+    if(state.user&&!canUse("create"))return notice("O padrinho ainda não autorizou o cadastro de anúncios.");
+    openLead(null);
+    setForm($("#leadForm"),{brand:"",model:"",version:"",city:"",uf:"",yearMake:"",yearModel:"",price:"",km:"",distanceKm:"",distanceVerified:false,
+      source:"Facebook Marketplace",url,evidence:"provided",notes:"Link individual recebido do Facebook Marketplace. Página e dados da moto ainda precisam ser conferidos; os filtros da busca não foram usados como dados do anúncio."});
+  });
+  $("#openDiagnostic").addEventListener("click",event=>{
+    // Fragmento não é enviado ao servidor: leva somente os filtros visíveis.
+    event.currentTarget.href="./diagnostico.html#"+encodeURIComponent(JSON.stringify(readFilters()));
+  });
   $("#assistantSend").addEventListener("click",assistantSearch);
   $("#searchHistory").addEventListener("click",e=>{const btn=e.target.closest("button[data-history]");if(!btn)return;const entry=allHistory()[Number(btn.dataset.history)];if(!entry)return;const f={...emptyFilters,...(entry.filters||{})};lastDiscoveryFilters=f;setForm($("#filterForm"),f);displayDiscovery(normalizeWebLeads(entry.items),entry);$("#automaticResults").scrollIntoView({behavior:"smooth",block:"start"});});
   enableVoiceInput();

@@ -1,5 +1,5 @@
-const CACHE="evolution-radar-ia-static-2026-11-v10";
-const FILES=["./","./index.html","./styles.css","./app.js","./local-intent.mjs","./workspace-config.js","./team-roles.mjs","./team-registration.js","./team-admin.js","./team-data.js","./team-client.js","./br-municipios.mjs","./listing-facts.mjs","./core.mjs","./firebase-client.js","./firebase-config.js","./search-config.js","./search-engine.mjs","./icon.svg","./manifest.webmanifest"];
+const CACHE="evolution-radar-ia-static-2026-11-v11";
+const FILES=["./","./index.html","./styles.css","./app.js","./local-intent.mjs","./workspace-config.js","./team-roles.mjs","./team-registration.js","./team-admin.js","./team-data.js","./team-client.js","./br-municipios.mjs","./listing-facts.mjs","./marketplaces.mjs","./core.mjs","./firebase-client.js","./firebase-config.js","./search-config.js","./search-engine.mjs","./diagnostico.html","./diagnostics.mjs","./diagnostics-ui.js","./diagnostics.css","./icon.svg","./manifest.webmanifest"];
 self.addEventListener("install",event=>event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(FILES)).then(()=>self.skipWaiting())));
 self.addEventListener("activate",event=>event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(key=>key.startsWith("evolution-radar-ia-static-")&&key!==CACHE).map(key=>caches.delete(key)))).then(()=>self.clients.claim())));
 self.addEventListener("fetch",event=>{
