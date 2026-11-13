@@ -36,8 +36,9 @@ export function assessAdvertisedRisks(content){
   return Object.fromEntries(Object.entries(rules).map(([key,rule])=>{
     // Retira negações ANTES de procurar afirmações positivas. Uma negação não
     // equivale a certidão limpa: continua sem validação independente.
+    const denied=Boolean(text.match(rule.negative));
     const withoutNegations=text.replace(rule.negative," ");
     return [key,rule.positive.test(withoutNegations)?"declared-present":
-      rule.negative.test(text)?"seller-denied":"unknown"];
+      denied?"seller-denied":"unknown"];
   }));
 }
