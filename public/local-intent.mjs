@@ -43,6 +43,11 @@ export function parseLocalIntent(message, previousFilters = {}) {
     else {filters.brand = "Yamaha"; filters.model = displacement ? "Fazer " + displacement[1] : "Fazer"; filters.version = "";}
   }
 
+  // DR160/DR 160 constam entre as pesquisas reais do Radar.
+  if (!filters.model && /\bdr\s*160\b/.test(s)) {
+    if (filters.brand && norm(filters.brand) !== "suzuki") warnings.push("DR160 não corresponde à marca informada.");
+    else {filters.brand = "Suzuki";filters.model = "DR 160";filters.version = "";}
+  }
   const range = s.match(/\b((?:19|20)\d{2})\s*(?:a|ate|e|-)\s*((?:19|20)\d{2})\b/);
   if (range) {
     const start = Number(range[1]), end = Number(range[2]);
@@ -53,11 +58,15 @@ export function parseLocalIntent(message, previousFilters = {}) {
     if (years.length === 1) {filters.yearFrom = years[0]; filters.yearTo = years[0];}
     else if (years.length > 1) warnings.push("Há vários anos sem uma faixa clara. Especifique o intervalo.");
   }
-  const price = s.match(/\b(?:ate|no maximo de|abaixo de|limite de)\s*(r\$\s*)?(\d[\d.,]*)(?:\s*(mil))?\b/);
-  if (price) {
-    const v = price[2].replace(/\.(?=\d{3}(?:\D|$))/g, "").replace(",", ".");
-    const n = Number(v) * (price[3] ? 1000 : 1);
-    if (Number.isFinite(n) && n >= 3000 && n <= 1000000) filters.priceMax = String(n);
+  // Unidade faz parte do valor: "até 20mil km" nunca é R$ 20.000.
+  // Analisa todas as ocorrências porque preço e quilometragem podem coexistir.
+  const pricePattern=/\b(?:ate|no maximo de|abaixo de|limite de)\s*(r\$\s*)?(\d[\d.,]*)(?:\s*(mil))?\b/gi;
+  for(const hit of s.matchAll(pricePattern)){
+    const rest=s.slice(hit.index+hit[0].length);
+    if(/^\s*(?:km|kms|quilometros|rodados)\b/.test(rest))continue;
+    const rawNumber=hit[2].replace(/\.(?=\d{3}(?:\D|$))/g,"").replace(/,(?=\d{3}(?:\D|$))/g,"").replace(",",".");
+    const n=Number(rawNumber)*(hit[3]?1000:1);
+    if(Number.isFinite(n)&&n>=3000&&n<=1000000){filters.priceMax=String(n);break;}
   }
   // Cidades reconhecidas por nome inequívoco; jamais usar localização aproximada do aparelho.
   const places = [
@@ -95,14 +104,14 @@ export function parseLocalIntent(message, previousFilters = {}) {
   if (seller) filters.sellerType = seller;
   const radius = s.match(/\braio(?:\s+de)?\s*(\d{1,4})\s*(?:km|quilometros)\b/);
   if (radius && Number(radius[1]) <= 1000) filters.radiusKm = radius[1];
-  const km = s.match(/\b(?:ate|menos de|no maximo de)\s*(\d{1,3}(?:[.,]\d{3})*)\s*(?:km|quilometros)\s*(?:rodados)?\b/);
-  if (km && !radius) {
-    const kmValue = Number(km[1].replace(/[.,]/g,""));
+  const km = s.match(/\b(?:ate|menos de|no maximo de|abaixo de|limite de)\s*(\d{1,6}(?:[.,]\d{3})*)(?:\s*(mil))?\s*(?:km|kms|quilometros|rodados)\b/);
+  if (km) {
+    const kmValue = Number(km[1].replace(/[.,]/g,""))*(km[2]?1000:1);
     if (kmValue > 0 && kmValue <= 300000) filters.kmMax = String(kmValue);
   }
   // Quantia escrita por extenso é interpretada apenas quando clara.
   const priceWords = s.match(/\b(?:ate|no maximo|abaixo de)\s*(?:r\$\s*)?(oito|sete|seis|cinco|nove|dez|onze|doze|quinze|vinte)\s+mil\b/);
-  if (priceWords) {
+  if (priceWords && !/^\s*(?:km|kms|quilometros|rodados)\b/.test(s.slice(priceWords.index+priceWords[0].length))) {
     const amounts={cinco:5,seis:6,sete:7,oito:8,nove:9,dez:10,onze:11,doze:12,quinze:15,vinte:20};
     filters.priceMax = String(amounts[priceWords[1]]*1000);
   }
@@ -118,7 +127,11 @@ export function mergeIntentFilters(previous, interpreted) {
     (incoming.model && norm(incoming.model) !== norm(original.model));
   // Não transportar filtros de outra moto (ex.: Yamaha Factor → Kawasaki Ninja).
   // Preservar apenas localização e preferências geográficas, sem inventar dados.
-  const base=changedVehicle?{
+  // Pedido completo (veículo + ano + cidade) inicia uma pesquisa nova,
+  // mesmo para o mesmo modelo: não carrega preço/KM antigos silenciosamente.
+  // Pedidos parciais mantêm o contexto para permitir refinamentos.
+  const completeSearch=Boolean(incoming.brand&&incoming.model&&incoming.yearFrom&&incoming.originCity);
+  const base=(changedVehicle||completeSearch)?{
     ...original,version:"",yearFrom:"",yearTo:"",priceMin:"",priceMax:"",
     kmMax:"",sellerType:"all"
   }:original;
