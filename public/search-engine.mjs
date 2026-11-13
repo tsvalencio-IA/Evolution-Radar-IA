@@ -5,7 +5,8 @@ const SOURCES = [
   {name:"OLX",domains:["olx.com.br"]},
   {name:"Webmotors",domains:["webmotors.com.br"]},
   {name:"Mercado Livre",domains:["mercadolivre.com.br"]},
-  {name:"NaPista",domains:["napista.com.br"]}
+  {name:"NaPista",domains:["napista.com.br"]},
+  {name:"Facebook Marketplace",domains:["facebook.com"]}
 ];
 const simple=x=>String(x??"").trim().slice(0,140);
 export function searchQuery(filters){
@@ -32,6 +33,7 @@ export function classifySearchPage(url){
   try{u=new URL(url);}catch{return "unknown";}
   const source=marketplaceName(u.href);
   const path=u.pathname.replace(/\/+$/,"");
+  if(source==="Facebook Marketplace")return /^\/marketplace\/item\/\d{5,30}$/.test(path)?"individual-candidate":/^\/marketplace(?:\/|$)/.test(path)?"catalog":"unknown";
   if(source==="OLX"){
     return /[-\/]\d{9,}$/.test(path)&&path.includes("/autos-e-pecas/motos/")?"individual-candidate":"catalog";
   }
@@ -50,6 +52,7 @@ export function relevantSearchPage(item){
   if(!item||typeof item!=="object")return false;
   let u;try{u=new URL(String(item.url??""));}catch{return false;}
   if(!marketplaceName(u.href)||u.protocol!=="https:")return false;
+  if(marketplaceName(u.href)==="Facebook Marketplace"&&classifySearchPage(u.href)==="unknown")return false;
   const path=decodeURIComponent(u.pathname).normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
   if(/(?:^|\/)(?:imoveis|apartamentos?|casas?|celulares?|smartphones?|eletronicos|informatica|moda|roupas?|moveis|eletrodomesticos|terrenos?|carros|automoveis)(?:\/|$)/.test(path))return false;
   if(classifySearchPage(u.href)==="individual-candidate")return true;

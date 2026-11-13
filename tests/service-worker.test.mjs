@@ -37,9 +37,9 @@ test("Service Worker entrega cache válido quando falha rede",async()=>{
 test("atualização remove somente cache do Radar, preservando outros projetos no mesmo domínio",async()=>{
  const events=new Map(),deleted=[];
  const self={clients:{claim:async()=>{}},addEventListener:(name,fn)=>events.set(name,fn)};
- const caches={keys:async()=>["evolution-radar-ia-static-2026-11-v9","evolution-radar-ia-static-2026-11-v10","sos-valencio-cache","console-games-cache"],
+ const caches={keys:async()=>["evolution-radar-ia-static-2026-11-v9","evolution-radar-ia-static-2026-11-v10","evolution-radar-ia-static-2026-11-v11","sos-valencio-cache","console-games-cache"],
    delete:async name=>deleted.push(name)};
  runInNewContext(code,{self,caches,Promise,console});
  let task;events.get("activate")({waitUntil:promise=>{task=promise}});await task;
- assert.deepEqual(deleted,["evolution-radar-ia-static-2026-11-v9"]);
+ assert.deepEqual(deleted,["evolution-radar-ia-static-2026-11-v9","evolution-radar-ia-static-2026-11-v10"]);
 });
