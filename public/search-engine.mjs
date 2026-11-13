@@ -95,7 +95,11 @@ export function normalizeWebLeads(raw){
     return [{
       title,url:norm,source,pageType,snippet:String(x.content??"").slice(0,750),
       observedAt:String(x.observedAt??"").slice(0,30),evidence:"index",
-      extractionStatus:status,extractionFailureCode:failureCode,fields,assessment
+      extractionStatus:status,extractionFailureCode:failureCode,
+      riskDeclarations:x.riskDeclarations&&typeof x.riskDeclarations==="object"?Object.fromEntries(
+        ["auction","accident","theftRecovery","chassisRemark","restriction"].map(key=>[key,
+          ["declared-present","seller-denied","unknown"].includes(x.riskDeclarations[key])?x.riskDeclarations[key]:"unknown"])):null,
+      fields,assessment
     }];
   });
 }
