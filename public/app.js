@@ -182,7 +182,7 @@ function displayDiscovery(items,metadata){
   const suppressed=excluded.length?
     '<details class="suppressed-evidence"><summary>Consultar '+excluded.length+' fonte(s) não qualificadas</summary>'+
     '<div class="suppressed-list">'+excluded.map(({item:x,region})=>
-      '<div class="suppressed-entry"><strong>'+esc(x.title)+'</strong><span>'+esc(x.assessment?.bucket==="outside"?"Fora dos critérios":why[region.category]||"Informações não comprovadas")+
+      '<div class="suppressed-entry"><strong>'+esc(x.title)+'</strong><span>'+esc(x.assessment?.bucket==="outside"?(x.assessment?.reasons||[]).join(" · ")||"Fora dos critérios":why[region.category]||"Informações não comprovadas")+
       '</span><a target="_blank" rel="noopener noreferrer" href="'+esc(x.url)+'">Fonte original</a></div>').join("")+'</div></details>':"";
   const pending=unresolved.length?'<section><div class="group-head"><h2>Anúncios individuais a conferir</h2><span>'+unresolved.length+'</span></div>'+
     '<p class="micro">Localização ou modelo ainda sem comprovação. Estes anúncios não estão classificados como compatíveis com os filtros.</p>'+
