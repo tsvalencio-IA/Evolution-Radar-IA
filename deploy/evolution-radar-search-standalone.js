@@ -332,6 +332,16 @@ async function tavilyCall(endpoint,body,env){
     return await r.json();
   }finally{clearTimeout(timer);}
 }
+// Códigos deliberadamente genéricos: não expor texto externo de erro, URL privada,
+// token ou inferir que um anúncio foi removido somente porque a extração falhou.
+export function classifyExtractionFailure(reason){
+  const value=String(reason??"").slice(0,400).toLowerCase();
+  if(/\b(?:401|403)\b|access denied|forbidden|captcha|blocked|unauthorized/.test(value))return "EXTRACT_ACCESS_REPORTED";
+  if(/\b(?:404|410)\b|not found|gone|removed/.test(value))return "EXTRACT_NOT_FOUND_REPORTED";
+  if(/\b429\b|rate limit|too many requests|quota/.test(value))return "EXTRACT_RATE_LIMIT_REPORTED";
+  if(/timed?\s*out|timeout|deadline/.test(value))return "EXTRACT_TIMEOUT_REPORTED";
+  return value?"EXTRACT_OTHER_REPORTED":"EXTRACT_NO_DETAILS";
+}
 async function collect(f,env){
   const plan=searchPlan(f);
   const batches=await Promise.allSettled(plan.map(query=>tavilyCall("search",{
@@ -339,6 +349,7 @@ async function collect(f,env){
     include_domains:ALLOWED_DOMAINS,include_answer:false,include_raw_content:false
   },env)));
   const succeeded=batches.filter(x=>x.status==="fulfilled").map(x=>x.value);
+  let queriesSucceeded=succeeded.length;
   if(!succeeded.length)throw Error(batches[0]?.reason?.message||"Nenhuma consulta concluída");
   const raw=succeeded.flatMap(data=>Array.isArray(data.results)?data.results:[]);
   let pages=sources(raw);
@@ -352,6 +363,7 @@ async function collect(f,env){
       const next=await tavilyCall("search",{query:q,search_depth:"basic",max_results:15,
         include_domains:ALLOWED_DOMAINS,include_answer:false,include_raw_content:false},env);
       pages=sources([...raw,...(Array.isArray(next.results)?next.results:[])]);
+      queriesSucceeded++;
     }catch{/* Mantém resultados anteriores e informa cobertura parcial. */}
   }
   const listed=pages.map(x=>({...x,pageType:listingType(x.url),source:marketplace(x.url),
@@ -367,23 +379,38 @@ async function collect(f,env){
       failures=Array.isArray(r.failed_results)?r.failed_results:[];
     }catch(e){failures=selected.map(x=>({url:x.url,error:String(e.message)}));}
   }
-  const bodies=new Map(extracted.map(x=>[x.url,String(x.raw_content??"")]));
+  const bodies=new Map(extracted.filter(x=>typeof x?.url==="string").map(x=>[x.url,String(x.raw_content??"")]));
+  const errors=new Map(failures.filter(x=>typeof x?.url==="string").map(x=>
+    [x.url,classifyExtractionFailure(x.error??x.message??x.reason)]));
+  const attempted=new Set(selected.map(x=>x.url));
   const individual=candidates.map(x=>{
-    const content=bodies.get(x.url),done=!!content;
-    const item={...x,extractionStatus:done?"extracted":selected.some(v=>v.url===x.url)?"failed":"not-attempted",
+    const content=bodies.get(x.url),done=!!content,wasAttempted=attempted.has(x.url);
+    const failureCode=wasAttempted&&!done
+      ?errors.get(x.url)??(bodies.has(x.url)?"EXTRACT_EMPTY_CONTENT":"EXTRACT_NO_DETAILS")
+      :null;
+    const item={...x,extractionStatus:done?"extracted":wasAttempted?"failed":"not-attempted",
+      extractionFailureCode:failureCode,
       fields:done?parseFacts(content,x.title,f):{price:null,km:null,yearMake:null,yearModel:null,city:null,uf:null}};
     item.assessment=gradeListing(item,f);
     return item;
   });
+  const extractionFailureReasons={};
+  for(const item of individual){
+    if(!item.extractionFailureCode)continue;
+    const code=item.extractionFailureCode;
+    extractionFailureReasons[code]=(extractionFailureReasons[code]??0)+1;
+  }
   const priority={prequalified:0,pending:1,outside:2};
   individual.sort((a,b)=>(priority[a.assessment.bucket]??8)-(priority[b.assessment.bucket]??8));
   const catalogs=listed.filter(x=>x.pageType==="catalog").slice(0,5).map(x=>({...x,
     assessment:{bucket:"catalog",reasons:["Página de resultados; nenhuma moto individual confirmada"]}}));
   return {source:"Tavily",query:plan[0],queries:plan,checkedAt:new Date().toISOString(),evidence:"index",
     items:[...individual,...catalogs].slice(0,20),coverage:{
-      queriesAttempted:plan.length+(recovered?1:0),queriesSucceeded:succeeded.length,indexedLinks:listed.length,
+      queriesAttempted:plan.length+(recovered?1:0),queriesSucceeded,indexedLinks:listed.length,
       individualLinks:individual.length,catalogPages:catalogs.length,
-      extractionAttempted:selected.length,extractionSucceeded:extracted.length,extractionFailures:failures.length,
+      extractionAttempted:selected.length,extractionSucceeded:individual.filter(x=>x.extractionStatus==="extracted").length,
+      extractionFailures:individual.filter(x=>x.extractionStatus==="failed").length,
+      extractionFailureReasons,
       prequalified:individual.filter(x=>x.assessment.bucket==="prequalified").length,
       regionRadiusVerified:false,regionRadiusMethod:"approximate-municipal-centers"
     },notice:"Resultado indexado ou extraído de página. Não comprova disponibilidade, documentação ou distância de rota."};
