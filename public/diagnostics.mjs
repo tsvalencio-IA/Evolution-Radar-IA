@@ -24,6 +24,7 @@ export function inspectSearchEvidence(data,filters,now=Date.now()){
     const missing=["price","km",filters.yearType==="make"?"yearMake":"yearModel","city","uf"].filter(key=>!has(fields[key]));
     return {url:publicUrl.href,title:item.title,extraction:item.extractionStatus,
       extractionFailureCode:item.extractionFailureCode??null,
+      riskDeclarations:item.riskDeclarations??null,
       missing,advertisedYear:fields.yearAdvertised??null,
       titleYears:[...new Set(item.title.match(/\b(?:19|20)\d{2}\b/g)||[])],
       category:knownUnavailable(raw)?"excluded":groups.matched.some(x=>x.item===item)?"compatible":groups.excluded.some(x=>x.item===item)?"excluded":"unresolved",
