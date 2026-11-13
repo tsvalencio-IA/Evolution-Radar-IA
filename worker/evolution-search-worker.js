@@ -1,5 +1,6 @@
 import {assessMunicipalityRadius} from "../public/br-municipios.mjs";
 import {parseListingFacts,vehicleMatches} from "../public/listing-facts.mjs";
+import {assessAdvertisedRisks,REPORTED_RISK_REASONS} from "../public/risk-evidence.mjs";
 /* Evolution Radar IA — Cloudflare Worker
  * Implantação pelo painel da Cloudflare, sem terminal.
  * Segredos obrigatórios no Worker (Settings > Variables and Secrets):
@@ -129,6 +130,9 @@ export function parseFacts(page,title,f){
 }
 export function gradeListing(item,f){
   const found=item.fields||{},title=normalized(item.title),reject=[],pending=[];
+  for(const [key,reason] of Object.entries(REPORTED_RISK_REASONS)){
+    if(item.riskDeclarations?.[key]==="declared-present")reject.push(reason);
+  }
   const vehicle=vehicleMatches(item,f);
   if(!vehicle.brand)pending.push("Marca não comprovada no anúncio");
   if(!vehicle.model){
@@ -188,6 +192,16 @@ async function tavilyCall(endpoint,body,env){
     return await r.json();
   }finally{clearTimeout(timer);}
 }
+// Códigos deliberadamente genéricos: não expor texto externo de erro, URL privada,
+// token ou inferir que um anúncio foi removido somente porque a extração falhou.
+export function classifyExtractionFailure(reason){
+  const value=String(reason??"").slice(0,400).toLowerCase();
+  if(/\b(?:401|403)\b|access denied|forbidden|captcha|blocked|unauthorized/.test(value))return "EXTRACT_ACCESS_REPORTED";
+  if(/\b(?:404|410)\b|not found|gone|removed/.test(value))return "EXTRACT_NOT_FOUND_REPORTED";
+  if(/\b429\b|rate limit|too many requests|quota/.test(value))return "EXTRACT_RATE_LIMIT_REPORTED";
+  if(/timed?\s*out|timeout|deadline/.test(value))return "EXTRACT_TIMEOUT_REPORTED";
+  return value?"EXTRACT_OTHER_REPORTED":"EXTRACT_NO_DETAILS";
+}
 async function collect(f,env){
   const plan=searchPlan(f);
   const batches=await Promise.allSettled(plan.map(query=>tavilyCall("search",{
@@ -195,6 +209,7 @@ async function collect(f,env){
     include_domains:ALLOWED_DOMAINS,include_answer:false,include_raw_content:false
   },env)));
   const succeeded=batches.filter(x=>x.status==="fulfilled").map(x=>x.value);
+  let queriesSucceeded=succeeded.length;
   if(!succeeded.length)throw Error(batches[0]?.reason?.message||"Nenhuma consulta concluída");
   const raw=succeeded.flatMap(data=>Array.isArray(data.results)?data.results:[]);
   let pages=sources(raw);
@@ -208,6 +223,7 @@ async function collect(f,env){
       const next=await tavilyCall("search",{query:q,search_depth:"basic",max_results:15,
         include_domains:ALLOWED_DOMAINS,include_answer:false,include_raw_content:false},env);
       pages=sources([...raw,...(Array.isArray(next.results)?next.results:[])]);
+      queriesSucceeded++;
     }catch{/* Mantém resultados anteriores e informa cobertura parcial. */}
   }
   const listed=pages.map(x=>({...x,pageType:listingType(x.url),source:marketplace(x.url),
@@ -223,23 +239,66 @@ async function collect(f,env){
       failures=Array.isArray(r.failed_results)?r.failed_results:[];
     }catch(e){failures=selected.map(x=>({url:x.url,error:String(e.message)}));}
   }
-  const bodies=new Map(extracted.map(x=>[x.url,String(x.raw_content??"")]));
+  // Tentativa avançada opcional e limitada a UM URL por pesquisa.
+  // Desligada por padrão: exige opção explícita TAVILY_ADVANCED_RETRY=true
+  // no ambiente de teste/autorizado por consumir créditos adicionais.
+  let advancedRetryAttempted=0,advancedRetrySucceeded=0;
+  if(env.TAVILY_ADVANCED_RETRY==="true"&&selected.length){
+    const missing=selected.filter(x=>!extracted.some(result=>result.url===x.url&&String(result.raw_content??"").trim())).slice(0,1);
+    if(missing.length){
+      advancedRetryAttempted=1;
+      try{
+        const recovered=await tavilyCall("extract",{urls:[missing[0].url],extract_depth:"advanced",
+          include_images:false,format:"markdown"},env);
+        const recoveredContent=(Array.isArray(recovered.results)?recovered.results:[])
+          .find(x=>x.url===missing[0].url&&String(x.raw_content??"").trim());
+        if(recoveredContent){
+          advancedRetrySucceeded=1;
+          extracted=extracted.filter(x=>x.url!==missing[0].url).concat(recoveredContent);
+          failures=failures.filter(x=>x.url!==missing[0].url);
+        }else{
+          const retried=Array.isArray(recovered.failed_results)?recovered.failed_results:[];
+          failures=failures.filter(x=>x.url!==missing[0].url).concat(
+            retried.length?retried:[{url:missing[0].url,error:"advanced_empty"}]);
+        }
+      }catch(e){
+        failures=failures.filter(x=>x.url!==missing[0].url).concat({url:missing[0].url,error:String(e.message)});
+      }
+    }
+  }
+  const bodies=new Map(extracted.filter(x=>typeof x?.url==="string").map(x=>[x.url,String(x.raw_content??"")]));
+  const errors=new Map(failures.filter(x=>typeof x?.url==="string").map(x=>
+    [x.url,classifyExtractionFailure(x.error??x.message??x.reason)]));
+  const attempted=new Set(selected.map(x=>x.url));
   const individual=candidates.map(x=>{
-    const content=bodies.get(x.url),done=!!content;
-    const item={...x,extractionStatus:done?"extracted":selected.some(v=>v.url===x.url)?"failed":"not-attempted",
+    const content=bodies.get(x.url),done=!!content,wasAttempted=attempted.has(x.url);
+    const failureCode=wasAttempted&&!done
+      ?errors.get(x.url)??(bodies.has(x.url)?"EXTRACT_EMPTY_CONTENT":"EXTRACT_NO_DETAILS")
+      :null;
+    const item={...x,extractionStatus:done?"extracted":wasAttempted?"failed":"not-attempted",
+      extractionFailureCode:failureCode,
+      riskDeclarations:done?assessAdvertisedRisks(content):null,
       fields:done?parseFacts(content,x.title,f):{price:null,km:null,yearMake:null,yearModel:null,city:null,uf:null}};
     item.assessment=gradeListing(item,f);
     return item;
   });
+  const extractionFailureReasons={};
+  for(const item of individual){
+    if(!item.extractionFailureCode)continue;
+    const code=item.extractionFailureCode;
+    extractionFailureReasons[code]=(extractionFailureReasons[code]??0)+1;
+  }
   const priority={prequalified:0,pending:1,outside:2};
   individual.sort((a,b)=>(priority[a.assessment.bucket]??8)-(priority[b.assessment.bucket]??8));
   const catalogs=listed.filter(x=>x.pageType==="catalog").slice(0,5).map(x=>({...x,
     assessment:{bucket:"catalog",reasons:["Página de resultados; nenhuma moto individual confirmada"]}}));
   return {source:"Tavily",query:plan[0],queries:plan,checkedAt:new Date().toISOString(),evidence:"index",
     items:[...individual,...catalogs].slice(0,20),coverage:{
-      queriesAttempted:plan.length+(recovered?1:0),queriesSucceeded:succeeded.length,indexedLinks:listed.length,
+      queriesAttempted:plan.length+(recovered?1:0),queriesSucceeded,indexedLinks:listed.length,
       individualLinks:individual.length,catalogPages:catalogs.length,
-      extractionAttempted:selected.length,extractionSucceeded:extracted.length,extractionFailures:failures.length,
+      extractionAttempted:selected.length,extractionSucceeded:individual.filter(x=>x.extractionStatus==="extracted").length,
+      extractionFailures:individual.filter(x=>x.extractionStatus==="failed").length,
+      extractionFailureReasons,advancedRetryAttempted,advancedRetrySucceeded,
       prequalified:individual.filter(x=>x.assessment.bucket==="prequalified").length,
       regionRadiusVerified:false,regionRadiusMethod:"approximate-municipal-centers"
     },notice:"Resultado indexado ou extraído de página. Não comprova disponibilidade, documentação ou distância de rota."};
@@ -423,7 +482,7 @@ async function deleteRegisteredUser(payload,token,env){
 export default {
   async fetch(request,env){
     if(request.method==="GET"&&new URL(request.url).pathname==="/health")
-      return response({service:"Evolution Radar IA",version:"2026-11-12.5",capabilities:["search","interpret","municipal-radius","account-deletion"],radiusMethod:"approximate-municipal-centers",status:"online",aiBinding:env.AI?.run?"connected":"missing",aiInference:"not-tested-by-health",accountDeletionConfigured:!!env.FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON});
+      return response({service:"Evolution Radar IA",version:"2026-11-13.2",capabilities:["search","interpret","municipal-radius","account-deletion"],radiusMethod:"approximate-municipal-centers",status:"online",aiBinding:env.AI?.run?"connected":"missing",aiInference:"not-tested-by-health",accountDeletionConfigured:!!env.FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON});
     if(request.method==="OPTIONS")return new Response(null,{status:204,headers:cors});
     const endpoint=new URL(request.url).pathname;
     if(!["/search","/interpret","/admin/delete-user"].includes(endpoint)||request.method!=="POST")return response({error:"Endpoint inexistente"},404);

@@ -68,3 +68,42 @@ test("Kawasaki nova limpa limites antigos de Yamaha sem apagar localização",()
  assert.equal(f.sellerType,"all");assert.equal(f.originCity,"São José do Rio Preto");assert.equal(f.uf,"SP");
  assert.equal(f.radiusKm,"150");
 });
+
+test("auditoria F12: 20mil km não vira preço e não herda KM de outra pesquisa completa",()=>{
+  const previous={brand:"Honda",model:"CG 160",version:"Fan",kmMax:"40000",priceMax:"18000",
+    originCity:"São José do Rio Preto",uf:"SP",radiusKm:"50"};
+  for(const sentence of [
+    "Honda Fan 160 2024 em Campinas ate 20mil km",
+    "Honda CG 160 Fan 2024 em Campinas ate 20 mil km",
+    "Honda CG 160 Fan 2024 em Campinas até 20.000 km",
+    "Honda CG 160 Fan 2024 em Campinas até 20 mil rodados"
+  ]){
+    const out=parseLocalIntent(sentence,previous),merged=mergeIntentFilters(previous,out.filters);
+    assert.deepEqual(out.warnings,[],sentence);
+    assert.equal(out.filters.kmMax,"20000",sentence);
+    assert.equal(out.filters.priceMax,undefined,sentence);
+    assert.equal(merged.kmMax,"20000",sentence);
+    assert.equal(merged.priceMax,"",sentence);
+    assert.equal(merged.originCity,"Campinas",sentence);
+  }
+});
+test("preço e quilometragem simultâneos não se misturam; refinamento parcial preserva contexto",()=>{
+  const old={brand:"Honda",model:"CG 160",version:"Fan",yearFrom:"2024",yearTo:"2024",
+    originCity:"Campinas",uf:"SP",radiusKm:"50",priceMax:"18000",kmMax:"40000"};
+  const exact=parseLocalIntent("Honda Fan 160 2024 em Campinas até R$ 18.000 e até 20.000 km",old);
+  assert.equal(exact.filters.priceMax,"18000");
+  assert.equal(exact.filters.kmMax,"20000");
+  const partial=parseLocalIntent("Agora até 10 mil km",old);
+  const merged=mergeIntentFilters(old,partial.filters);
+  assert.equal(merged.kmMax,"10000");
+  assert.equal(merged.priceMax,"18000");
+  assert.equal(merged.originCity,"Campinas");
+});
+test("Suzuki DR160 2026 de Ribeirão Preto é reconhecida sem inventar preços",()=>{
+  const result=parseLocalIntent("Suzuki Dr160 2026 em Ribeirão Preto raio de 10 km");
+  assert.equal(result.filters.brand,"Suzuki");
+  assert.equal(result.filters.model,"DR 160");
+  assert.equal(result.filters.originCity,"Ribeirão Preto");
+  assert.equal(result.filters.radiusKm,"10");
+  assert.equal(result.filters.priceMax,undefined);
+});

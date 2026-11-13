@@ -87,6 +87,7 @@ export function normalizeWebLeads(raw){
       uf:typeof raw.uf==="string"?raw.uf.slice(0,2):null
     };
     const status=["extracted","failed","not-attempted"].includes(x.extractionStatus)?x.extractionStatus:"not-attempted";
+    const failureCode=typeof x.extractionFailureCode==="string"&&/^EXTRACT_[A-Z_]{3,60}$/.test(x.extractionFailureCode)?x.extractionFailureCode:null;
     const validBuckets=["prequalified","pending","outside","catalog"];
     const assessment=x.assessment&&validBuckets.includes(x.assessment.bucket)?
       {bucket:x.assessment.bucket,reasons:Array.isArray(x.assessment.reasons)?x.assessment.reasons.filter(y=>typeof y==="string").slice(0,9).map(y=>y.slice(0,160)):[]}:
@@ -94,7 +95,11 @@ export function normalizeWebLeads(raw){
     return [{
       title,url:norm,source,pageType,snippet:String(x.content??"").slice(0,750),
       observedAt:String(x.observedAt??"").slice(0,30),evidence:"index",
-      extractionStatus:status,fields,assessment
+      extractionStatus:status,extractionFailureCode:failureCode,
+      riskDeclarations:x.riskDeclarations&&typeof x.riskDeclarations==="object"?Object.fromEntries(
+        ["auction","accident","theftRecovery","chassisRemark","restriction"].map(key=>[key,
+          ["declared-present","seller-denied","unknown"].includes(x.riskDeclarations[key])?x.riskDeclarations[key]:"unknown"])):null,
+      fields,assessment
     }];
   });
 }

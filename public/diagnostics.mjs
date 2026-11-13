@@ -1,6 +1,6 @@
 import {normalizeWebLeads,partitionDiscovery} from "./search-engine.mjs";
 
-export const DIAGNOSTIC_VERSION="2026-11-13.1";
+export const DIAGNOSTIC_VERSION="2026-11-13.2";
 const FILTER_KEYS=["brand","model","version","yearType","yearFrom","yearTo","priceMin","priceMax","kmMax","originCity","uf","radiusKm","sellerType"];
 export function diagnosticFilters(value={}){
   return Object.fromEntries(FILTER_KEYS.map(key=>[key,String(value?.[key]??"").trim().slice(0,100)]));
@@ -23,6 +23,8 @@ export function inspectSearchEvidence(data,filters,now=Date.now()){
     const raw=rawFor(item),publicUrl=new URL(item.url);publicUrl.username="";publicUrl.password="";publicUrl.search="";publicUrl.hash="";
     const missing=["price","km",filters.yearType==="make"?"yearMake":"yearModel","city","uf"].filter(key=>!has(fields[key]));
     return {url:publicUrl.href,title:item.title,extraction:item.extractionStatus,
+      extractionFailureCode:item.extractionFailureCode??null,
+      riskDeclarations:item.riskDeclarations??null,
       missing,advertisedYear:fields.yearAdvertised??null,
       titleYears:[...new Set(item.title.match(/\b(?:19|20)\d{2}\b/g)||[])],
       category:knownUnavailable(raw)?"excluded":groups.matched.some(x=>x.item===item)?"compatible":groups.excluded.some(x=>x.item===item)?"excluded":"unresolved",
@@ -36,6 +38,8 @@ export function inspectSearchEvidence(data,filters,now=Date.now()){
     queriesAttempted:count(coverage.queriesAttempted),queriesSucceeded:count(coverage.queriesSucceeded),
     extractionAttempted:count(coverage.extractionAttempted),extractionSucceeded:count(coverage.extractionSucceeded),
     extractionFailures:count(coverage.extractionFailures),
+    extractionFailureReasons:Object.fromEntries(Object.entries(coverage.extractionFailureReasons||{})
+      .filter(([code,value])=>/^EXTRACT_[A-Z_]{3,60}$/.test(code)&&count(value)!==null)),
     total:normalized.length,individual:candidates.length,catalogs:normalized.length-candidates.length,
     withinRegion:groups.matched.length,
     compatible:groups.matched.filter(x=>x.item.assessment?.bucket==="prequalified"&&!knownUnavailable(rawFor(x.item))).length,

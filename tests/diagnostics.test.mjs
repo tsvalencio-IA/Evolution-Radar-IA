@@ -70,3 +70,15 @@ test("tela e transportes do diagnóstico não incluem APIs de escrita, aprovaç�
   assert.match(html,/Executar diagnóstico/);assert.match(html,/Copiar relatório/);
   assert.doesNotMatch(html,/type="password"/);
 });
+
+test("diagnóstico informa códigos sanitizados sem revelar erros brutos de terceiros",()=>{
+ const failing={...candidate,extractionStatus:"failed",extractionFailureCode:"EXTRACT_ACCESS_REPORTED",
+  fields:{price:null,km:null,yearMake:null,yearModel:null,city:null,uf:null},assessment:{bucket:"pending"}};
+ const info=inspectSearchEvidence({source:"Tavily",items:[failing],coverage:{
+  extractionAttempted:1,extractionSucceeded:0,extractionFailures:1,
+  extractionFailureReasons:{EXTRACT_ACCESS_REPORTED:1,INVALID_MESSAGE:"segredo"}
+ }},filters);
+ assert.equal(info.listings[0].extractionFailureCode,"EXTRACT_ACCESS_REPORTED");
+ assert.deepEqual(info.extractionFailureReasons,{EXTRACT_ACCESS_REPORTED:1});
+ assert.equal(info.compatible,0);
+});

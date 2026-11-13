@@ -6,7 +6,7 @@ import {openFirebase} from "./firebase-client.js";
 import {parseLocalIntent,mergeIntentFilters} from "./local-intent.mjs";
 import {openTeam} from "./team-client.js";
 import {DEFAULT_PERMISSIONS,PERMISSION_NAMES} from "./team-roles.mjs";
-import {facebookListingUrl,facebookMarketplaceSearch} from "./marketplaces.mjs";
+import {facebookListingUrl,facebookMarketplaceSearch,facebookSharedListing} from "./marketplaces.mjs";
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const LOCAL="evolution-radar-ia-local-v1",THEME="evolution-radar-ia-theme";
 const state={filters:{...emptyFilters},leads:[],history:[],mode:"local",firebase:null,user:null,remoteReady:false,team:null,teamInfo:null,sharedLeads:[],sharedHistory:[],requests:[],members:[],audit:[],accountDeletionReady:false};
@@ -158,9 +158,10 @@ function displayDiscovery(items,metadata){
     const status=region.category==="location-unverified"?"Localização e raio não confirmados":
       region.category==="model-unverified"?"Marca, modelo ou versão a confirmar":"";
     const reasons='<p class="card-reason">'+esc([status,...(x.assessment?.reasons||[])].filter(Boolean).join(" · "))+'</p>';
+    const extractNote=x.extractionStatus==="failed"?'<p class="micro">Extração não concluída · código: '+esc(x.extractionFailureCode||"EXTRACT_NO_DETAILS")+'. Isso não comprova que o anúncio foi removido.</p>':"";
     return '<article class="lead-card"><div class="card-top"><h3 class="card-title">'+esc(x.title)+'</h3><span class="chip '+(badge==="Pré-qualificado"?"confirmed":"pending")+'">'+badge+'</span></div>'+
       '<p class="micro">'+esc(x.source)+' · anúncio individual indexado</p>'+fields+
-      '<p class="card-note">'+esc(String(x.snippet||"").slice(0,450))+'</p>'+reasons+
+      '<p class="card-note">'+esc(String(x.snippet||"").slice(0,450))+'</p>'+extractNote+reasons+
       '<div class="card-actions"><a class="btn secondary small" target="_blank" rel="noopener noreferrer" href="'+esc(x.url)+'">Ver fonte original</a>'+
       '<button type="button" class="btn small" data-discovery="'+items.indexOf(x)+'">Investigar e registrar</button></div></article>';
   };
@@ -181,7 +182,7 @@ function displayDiscovery(items,metadata){
   const suppressed=excluded.length?
     '<details class="suppressed-evidence"><summary>Consultar '+excluded.length+' fonte(s) não qualificadas</summary>'+
     '<div class="suppressed-list">'+excluded.map(({item:x,region})=>
-      '<div class="suppressed-entry"><strong>'+esc(x.title)+'</strong><span>'+esc(x.assessment?.bucket==="outside"?"Fora dos critérios":why[region.category]||"Informações não comprovadas")+
+      '<div class="suppressed-entry"><strong>'+esc(x.title)+'</strong><span>'+esc(x.assessment?.bucket==="outside"?(x.assessment?.reasons||[]).join(" · ")||"Fora dos critérios":why[region.category]||"Informações não comprovadas")+
       '</span><a target="_blank" rel="noopener noreferrer" href="'+esc(x.url)+'">Fonte original</a></div>').join("")+'</div></details>':"";
   const pending=unresolved.length?'<section><div class="group-head"><h2>Anúncios individuais a conferir</h2><span>'+unresolved.length+'</span></div>'+
     '<p class="micro">Localização ou modelo ainda sem comprovação. Estes anúncios não estão classificados como compatíveis com os filtros.</p>'+
@@ -680,5 +681,13 @@ async function boot(){
   }
   if("serviceWorker" in navigator && location.protocol==="https:")navigator.serviceWorker.register("./sw.js").catch(()=>{});
   const hash=location.hash.slice(1);if(["pesquisa","oportunidades","analise","config"].includes(hash))switchView(hash);
+  const incoming=facebookSharedListing(location.search);
+  if(incoming){
+    switchView("pesquisa");
+    $("#facebookListingUrl").value=incoming;
+    $("#facebookMarketplacePanel").scrollIntoView({block:"center"});
+    notice("Link individual do Facebook recebido. Confira o anúncio antes de registrar; nenhum dado foi salvo automaticamente.");
+    try{history.replaceState(history.state,"",location.pathname+location.hash);}catch{}
+  }
 }
 boot();
