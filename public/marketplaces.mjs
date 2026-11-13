@@ -17,3 +17,20 @@ export function facebookMarketplaceSearch(filters={}){
   return {name:"Facebook Marketplace",url:url.href,mode:"external-session",automaticImport:false,
     location:[filters.originCity,filters.uf].filter(Boolean).join(" / "),radiusKm:String(filters.radiusKm||"")};
 }
+
+// Recebe somente URL pública individual compartilhada com o PWA instalado.
+// Não usa cookies, sessão do Facebook ou dados privados, nem grava automaticamente.
+export function facebookSharedListing(search=""){
+  const params=new URLSearchParams(String(search).replace(/^\?/,""));
+  if(params.get("share-target")!=="facebook")return "";
+  for(const value of [params.get("url"),params.get("text")]){
+    const direct=facebookListingUrl(value);
+    if(direct)return direct;
+    const urls=String(value||"").match(/https:\/\/[^\s<>"']+/gi)||[];
+    for(const candidate of urls){
+      const normalized=facebookListingUrl(candidate.replace(/[.,;!?]+$/,""));
+      if(normalized)return normalized;
+    }
+  }
+  return "";
+}
