@@ -1,6 +1,6 @@
 import {normalizeWebLeads,partitionDiscovery} from "./search-engine.mjs";
 
-export const DIAGNOSTIC_VERSION="2026-11-13.1";
+export const DIAGNOSTIC_VERSION="2026-11-13.2";
 const FILTER_KEYS=["brand","model","version","yearType","yearFrom","yearTo","priceMin","priceMax","kmMax","originCity","uf","radiusKm","sellerType"];
 export function diagnosticFilters(value={}){
   return Object.fromEntries(FILTER_KEYS.map(key=>[key,String(value?.[key]??"").trim().slice(0,100)]));
