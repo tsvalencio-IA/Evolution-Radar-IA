@@ -158,9 +158,10 @@ function displayDiscovery(items,metadata){
     const status=region.category==="location-unverified"?"Localização e raio não confirmados":
       region.category==="model-unverified"?"Marca, modelo ou versão a confirmar":"";
     const reasons='<p class="card-reason">'+esc([status,...(x.assessment?.reasons||[])].filter(Boolean).join(" · "))+'</p>';
+    const extractNote=x.extractionStatus==="failed"?'<p class="micro">Extração não concluída · código: '+esc(x.extractionFailureCode||"EXTRACT_NO_DETAILS")+'. Isso não comprova que o anúncio foi removido.</p>':"";
     return '<article class="lead-card"><div class="card-top"><h3 class="card-title">'+esc(x.title)+'</h3><span class="chip '+(badge==="Pré-qualificado"?"confirmed":"pending")+'">'+badge+'</span></div>'+
       '<p class="micro">'+esc(x.source)+' · anúncio individual indexado</p>'+fields+
-      '<p class="card-note">'+esc(String(x.snippet||"").slice(0,450))+'</p>'+reasons+
+      '<p class="card-note">'+esc(String(x.snippet||"").slice(0,450))+'</p>'+extractNote+reasons+
       '<div class="card-actions"><a class="btn secondary small" target="_blank" rel="noopener noreferrer" href="'+esc(x.url)+'">Ver fonte original</a>'+
       '<button type="button" class="btn small" data-discovery="'+items.indexOf(x)+'">Investigar e registrar</button></div></article>';
   };
