@@ -379,6 +379,33 @@ async function collect(f,env){
       failures=Array.isArray(r.failed_results)?r.failed_results:[];
     }catch(e){failures=selected.map(x=>({url:x.url,error:String(e.message)}));}
   }
+  // Tentativa avançada opcional e limitada a UM URL por pesquisa.
+  // Desligada por padrão: exige opção explícita TAVILY_ADVANCED_RETRY=true
+  // no ambiente de teste/autorizado por consumir créditos adicionais.
+  let advancedRetryAttempted=0,advancedRetrySucceeded=0;
+  if(env.TAVILY_ADVANCED_RETRY==="true"&&selected.length){
+    const missing=selected.filter(x=>!extracted.some(result=>result.url===x.url&&String(result.raw_content??"").trim())).slice(0,1);
+    if(missing.length){
+      advancedRetryAttempted=1;
+      try{
+        const recovered=await tavilyCall("extract",{urls:[missing[0].url],extract_depth:"advanced",
+          include_images:false,format:"markdown"},env);
+        const recoveredContent=(Array.isArray(recovered.results)?recovered.results:[])
+          .find(x=>x.url===missing[0].url&&String(x.raw_content??"").trim());
+        if(recoveredContent){
+          advancedRetrySucceeded=1;
+          extracted=extracted.filter(x=>x.url!==missing[0].url).concat(recoveredContent);
+          failures=failures.filter(x=>x.url!==missing[0].url);
+        }else{
+          const retried=Array.isArray(recovered.failed_results)?recovered.failed_results:[];
+          failures=failures.filter(x=>x.url!==missing[0].url).concat(
+            retried.length?retried:[{url:missing[0].url,error:"advanced_empty"}]);
+        }
+      }catch(e){
+        failures=failures.filter(x=>x.url!==missing[0].url).concat({url:missing[0].url,error:String(e.message)});
+      }
+    }
+  }
   const bodies=new Map(extracted.filter(x=>typeof x?.url==="string").map(x=>[x.url,String(x.raw_content??"")]));
   const errors=new Map(failures.filter(x=>typeof x?.url==="string").map(x=>
     [x.url,classifyExtractionFailure(x.error??x.message??x.reason)]));
@@ -410,7 +437,7 @@ async function collect(f,env){
       individualLinks:individual.length,catalogPages:catalogs.length,
       extractionAttempted:selected.length,extractionSucceeded:individual.filter(x=>x.extractionStatus==="extracted").length,
       extractionFailures:individual.filter(x=>x.extractionStatus==="failed").length,
-      extractionFailureReasons,
+      extractionFailureReasons,advancedRetryAttempted,advancedRetrySucceeded,
       prequalified:individual.filter(x=>x.assessment.bucket==="prequalified").length,
       regionRadiusVerified:false,regionRadiusMethod:"approximate-municipal-centers"
     },notice:"Resultado indexado ou extraído de página. Não comprova disponibilidade, documentação ou distância de rota."};
