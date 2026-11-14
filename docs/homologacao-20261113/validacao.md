@@ -4,13 +4,13 @@ Conferência concluída em 14/11/2026. Base anterior: 116/116 testes aprovados.
 
 | Verificação executada | Resultado | Escopo |
 |---|---|---|
-| `npm run check` | **161 testes, 161 aprovados, 0 falhas** | Sintaxe, Worker gerado equivalente, regras de negócio, interpretação, pesquisa com mocks, fontes, riscos, geografia, autenticação de Worker, permissões e Service Worker |
+| `npm run check` | **165 testes, 165 aprovados, 0 falhas** | Sintaxe, Worker gerado equivalente, regras de negócio, interpretação, pesquisa com mocks, fontes, riscos, geografia, autenticação de Worker, permissões e Service Worker |
 | Regras + APIs no emulador | **17 testes, 17 aprovados, 0 falhas** | Leitura privada, solicitação/aprovação, criação/edição/arquivamento, suspensão/revogação, histórico com autor/timestamp e trilha de risco |
 | Referências/imports locais e arquivos do cache | Nenhum recurso ausente | Conferência de arquivos reais e manifesto; ícones PNG derivados do SVG original |
 | `git diff --check` | Sem erros | Espaçamento/diff |
 | Navegador Chrome local com fixtures | Fluxos abaixo conferidos | Aplicativo real copiado; transportes substituídos somente na cópia de QA |
 
-Os 45 testes adicionais da suíte geral cobrem as falhas novas e seus limites. Testes antigos foram ajustados quando pressupunham que só extração/índice bastava para pré-qualificação ou confundiam distância de rota com raio municipal; a evidência pública agora é exigida. Nenhum teste foi removido para ocultar falhas.
+Os 49 testes adicionais da suíte geral cobrem as falhas novas e seus limites. Testes antigos foram ajustados quando pressupunham que só extração/índice bastava para pré-qualificação ou confundiam distância de rota com raio municipal; a evidência pública agora é exigida. Nenhum teste foi removido para ocultar falhas.
 
 ## Integração isolada
 
@@ -57,3 +57,12 @@ O preço máximo visual de exemplo no placeholder não é valor do formulário: 
 Não houve pesquisa real de estoque de motos, inferência real de IA nesta candidata, conexão real a fornecedor veicular, leitura de sessão Facebook ou envio a vendedor. Aparição no seletor nativo de compartilhamento, abertura do aplicativo no telefone, atualização do PWA instalado e Safari/iPhone físico precisam de homologação autorizada.
 
 A captura automática do evento de download no iframe não terminou no navegador remoto; não é reportada como exportação validada de ponta a ponta. Sanitização, CSV protegido e round-trip JSON dos campos novos passaram nos testes; download/importação no aparelho permanece no roteiro de homologação. Disponibilidade de venda e documentos exigem confirmação atual na fonte. Zero qualificados não significa ausência de motos.
+
+## Revisão adicional do Codex — 14/11/2026
+
+O PR #17 recebeu dois apontamentos P2 depois da primeira validação de 161 testes. As correções foram feitas **somente na branch de homologação**, com quatro testes novos (total 165):
+
+- **Modelo desconhecido versus filtros salvos**: "Honda XRE 300 2020 em Campinas" depois de uma Honda CG 160 Fan não usa mais a CG salva como se o pedido tivesse sido compreendido localmente. A regra também cobre "XRE 300" sem marca, preservando alterações parciais como "Honda em Campinas". Se a IA responder com modelo que contradiz o nome explícito, a pesquisa é bloqueada para esclarecimento.
+- **Faixas abertas de ano**: "a partir de/desde 2020" mantém `yearFrom=2020` e `yearTo` vazio; "até 2022" mantém somente `yearTo=2022`; "ano 2020" permanece exato. A rota remota não deve impor um ano final que o pedido não forneceu.
+
+Os testes `npm run check` no commit `8f178d72d52e996e5f242e0d92dd09d213c2a0ac` concluíram 165/165; os checks GitHub de segurança foram aprovados. Os testes em navegador físico e com anúncios reais continuam pendentes como descrito acima. Nenhum merge/publicação foi feito.
