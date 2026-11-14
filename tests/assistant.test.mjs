@@ -63,3 +63,19 @@ test("IA com resposta vazia informa código preciso, sem vazar prompt",async()=>
    assert.equal(JSON.stringify(body).includes("Procure Kawasaki"),false);
  }finally{globalThis.fetch=prev;}
 });
+
+test("Worker preserva ano inicial sem inventar teto no pedido XRE a partir de 2020",async()=>{
+  const previous=globalThis.fetch;
+  globalThis.fetch=async()=>Response.json({users:[{localId:"test-user",disabled:false}]});
+  const ai={run:async()=>({response:JSON.stringify({brand:"Honda",model:"XRE 300",
+    yearFrom:"2020",yearTo:"2020",originCity:"Campinas",uf:"SP"})})};
+  try{
+    const res=await worker.fetch(req("Honda XRE 300 a partir de 2020 em Campinas"),{...env,AI:ai});
+    const data=await res.json();
+    assert.equal(res.status,200,JSON.stringify(data));
+    assert.equal(data.filters.model,"XRE 300");
+    assert.equal(data.filters.yearFrom,"2020");
+    assert.equal(data.filters.yearTo,undefined);
+    assert.equal(data.filters.originCity,"Campinas");
+  }finally{globalThis.fetch=previous;}
+});
