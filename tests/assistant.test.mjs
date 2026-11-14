@@ -79,3 +79,17 @@ test("Worker preserva ano inicial sem inventar teto no pedido XRE a partir de 20
     assert.equal(data.filters.originCity,"Campinas");
   }finally{globalThis.fetch=previous;}
 });
+
+test("Worker rejeita modelo de IA divergente da XRE pedida, mesmo com ano correto",async()=>{
+  const previous=globalThis.fetch;
+  globalThis.fetch=async()=>Response.json({users:[{localId:"test-user",disabled:false}]});
+  const ai={run:async()=>({response:JSON.stringify({brand:"Honda",model:"CG 160",
+    yearFrom:"2020",yearTo:"2020",originCity:"Campinas",uf:"SP"})})};
+  try{
+    const res=await worker.fetch(req("Honda XRE 300 a partir de 2020 em Campinas"),{...env,AI:ai});
+    const data=await res.json();
+    assert.equal(res.status,422,JSON.stringify(data));
+    assert.equal(data.code,"INTENT_NEEDS_CLARIFICATION");
+    assert.equal(JSON.stringify(data).includes("CG 160"),false);
+  }finally{globalThis.fetch=previous;}
+});
