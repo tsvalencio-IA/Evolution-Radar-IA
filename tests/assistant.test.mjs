@@ -86,7 +86,7 @@ test("Worker rejeita modelo de IA divergente da XRE pedida, mesmo com ano corret
   const ai={run:async()=>({response:JSON.stringify({brand:"Honda",model:"CG 160",
     yearFrom:"2020",yearTo:"2020",originCity:"Campinas",uf:"SP"})})};
   try{
-    const res=await worker.fetch(req("Honda XRE 300 a partir de 2020 em Campinas"),{...env,AI:ai});
+    const res=await worker.fetch(req("Procure Honda XRE 300 a partir de 2020 em Campinas"),{...env,AI:ai});
     const data=await res.json();
     assert.equal(res.status,422,JSON.stringify(data));
     assert.equal(data.code,"INTENT_NEEDS_CLARIFICATION");
