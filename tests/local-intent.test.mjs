@@ -78,6 +78,10 @@ test("regressão Codex: modelo Honda XRE desconhecido não pode herdar CG 160 Fa
   assert.equal(parsed.filters.model,undefined);
   assert.equal(parsed.needsRemoteModel,true);
   assert.equal(parsed.filters.originCity,"Campinas");
+  const noBrand=parseLocalIntent("XRE 300 2020 em Campinas",old);
+  assert.equal(noBrand.needsRemoteModel,true);
+  assert.equal(noBrand.modelCue,"xre");
+  assert.equal(parsed.modelCue,"xre");
   const partial=parseLocalIntent("Honda em Campinas",old);
   assert.equal(partial.needsRemoteModel,false);
   const merged=mergeIntentFilters(old,partial.filters);
