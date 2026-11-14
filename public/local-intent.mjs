@@ -56,8 +56,11 @@ export function parseLocalIntent(message, previousFilters = {}) {
   const brandWord=filters.brand?norm(filters.brand).replace(/[^a-z0-9-]/g,"\\  const range = [...s.matchAll(/\b((?:19|20)\d{2})\s*(?:a|ate|e|-)\s*((?:19|20)\d{2})\b/g)].find(m=>!typedAt(m.index)&&!typedAt(m.index+m[0].length-m[2].length));"):"";
   const afterBrand=brandWord?s.match(new RegExp("\\b"+brandWord+"\\s+([a-z][a-z0-9-]{1,24})\\b"))?.[1]:"";
   const neutralWords=new Set(["em","no","na","nos","nas","de","do","da","dos","das","para","por","com","ano","anos","entre","ate","partir","a","e","modelo","fabricacao","moto","motocicleta","usada","usado","sem","preco","valor","maximo","minimo","raio","reais"]);
-  const needsRemoteModel=Boolean(filters.brand&&!filters.model&&
-    (displacement||(afterBrand&&!neutralWords.has(afterBrand))));
+  const beforeDisplacement=displacement?s.slice(0,displacement.index).match(/\b([a-z][a-z0-9-]{1,24})\s*$/)?.[1]:"";
+  const candidateWord=afterBrand&&!neutralWords.has(afterBrand)?afterBrand:
+    beforeDisplacement&&!neutralWords.has(beforeDisplacement)&&beforeDisplacement!==norm(filters.brand)?beforeDisplacement:"";
+  const modelCue=!filters.model?candidateWord:"";
+  const needsRemoteModel=Boolean(!filters.model&&(displacement||(filters.brand&&modelCue)));
 
   const range = [...s.matchAll(/\b((?:19|20)\d{2})\s*(?:a|ate|e|-)\s*((?:19|20)\d{2})\b/g)].find(m=>!typedAt(m.index)&&!typedAt(m.index+m[0].length-m[2].length));
   if (range) {
@@ -130,7 +133,7 @@ export function parseLocalIntent(message, previousFilters = {}) {
   const colorText=filters.originCity?s.replace(norm(filters.originCity),""):s;
   if (/\b(?:preta|preto|vermelha|vermelho|azul|branca|branco)\b/.test(colorText) &&
       !/\b(?:rio preto|ribeirao preto)\b/.test(s)) warnings.push("A cor da moto não é um filtro disponível nesta pesquisa.");
-  return {filters, warnings:[...new Set(warnings)], mode:"local", evidence:quantities.evidence, recognized:Object.keys(filters).length>0, needsRemoteModel, notice:"Interpretação por regras locais, sem usar IA remota. Confira os filtros."};
+  return {filters, warnings:[...new Set(warnings)], mode:"local", evidence:quantities.evidence, recognized:Object.keys(filters).length>0, needsRemoteModel, modelCue, notice:"Interpretação por regras locais, sem usar IA remota. Confira os filtros."};
 }
 
 export function mergeIntentFilters(previous, interpreted) {
