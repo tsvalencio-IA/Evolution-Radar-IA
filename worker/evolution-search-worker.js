@@ -255,6 +255,9 @@ async function interpretRequest(message,uid,env){
     if(local.filters.brand&&filters.brand&&normalized(local.filters.brand)!==normalized(filters.brand))throw Error("AI_INCOMPLETE_FILTERS");
     for(const key of ["brand","version","originCity","uf"])if(Object.hasOwn(local.filters,key))filters[key]=local.filters[key];
     if(local.filters.model&&/[A-Za-z]/.test(local.filters.model))filters.model=local.filters.model;
+    if(local.needsRemoteModel&&local.modelCue&&
+      !normalized(filters.model).replace(/[^a-z0-9]/g,"").includes(local.modelCue))
+      return response({error:"Modelo citado não confirmado pela IA; informe o modelo exato.",code:"INTENT_NEEDS_CLARIFICATION"},422);
     if(!filters.brand||!filters.model)throw Error("AI_INCOMPLETE_FILTERS");
     const data={filters,mode:"workers-ai",model:"glm-4.7-flash",notice:"Filtros interpretados por IA; confira os campos antes de considerar qualquer anúncio."};
     if(intentCache.size>30)intentCache.clear();
