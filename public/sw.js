@@ -1,16 +1,20 @@
-const CACHE="evolution-radar-ia-static-2026-11-v11";
-const FILES=["./","./index.html","./styles.css","./app.js","./local-intent.mjs","./workspace-config.js","./team-roles.mjs","./team-registration.js","./team-admin.js","./team-data.js","./team-client.js","./br-municipios.mjs","./listing-facts.mjs","./marketplaces.mjs","./core.mjs","./firebase-client.js","./firebase-config.js","./search-config.js","./search-engine.mjs","./diagnostico.html","./diagnostics.mjs","./diagnostics-ui.js","./diagnostics.css","./icon.svg","./manifest.webmanifest"];
+const CACHE="evolution-radar-ia-static-2026-11-v12-rc1";
+const FILES=["./","./index.html","./styles.css","./app.js","./local-intent.mjs","./intent-quantities.mjs","./page-evidence.mjs","./vehicle-risk.mjs","./geography.mjs","./share-target.mjs","./receber.html","./receive-share.js","./workspace-config.js","./team-roles.mjs","./team-registration.js","./team-admin.js","./team-data.js","./team-client.js","./br-municipios.mjs","./listing-facts.mjs","./marketplaces.mjs","./core.mjs","./firebase-client.js","./firebase-config.js","./search-config.js","./search-engine.mjs","./diagnostico.html","./diagnostics.mjs","./diagnostics-ui.js","./diagnostics.css","./icon.svg","./icon-192.png","./icon-512.png","./manifest.webmanifest"];
 self.addEventListener("install",event=>event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(FILES)).then(()=>self.skipWaiting())));
 self.addEventListener("activate",event=>event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(key=>key.startsWith("evolution-radar-ia-static-")&&key!==CACHE).map(key=>caches.delete(key)))).then(()=>self.clients.claim())));
 self.addEventListener("fetch",event=>{
   const request=event.request;
   if(request.method!=="GET"||new URL(request.url).origin!==self.location.origin)return;
+  const url=new URL(request.url),scope=new URL("./",self.location.href||request.url);
+  const files=new Set(FILES.map(path=>new URL(path,scope).pathname));
+  if(!files.has(url.pathname))return;
   event.respondWith(
     fetch(request).then(response=>{
       if(response.ok){
         const copy=response.clone();
         // Cache é secundário e não pode impedir a resposta da rede.
-        event.waitUntil(caches.open(CACHE).then(cache=>cache.put(request,copy)).catch(()=>{}));
+        // Armazena só recursos do app, sem consultas de compartilhamento ou rastreadores.
+        event.waitUntil(caches.open(CACHE).then(cache=>cache.put(url.origin+url.pathname,copy)).catch(()=>{}));
       }
       return response;
     }).catch(async()=>{

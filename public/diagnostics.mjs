@@ -1,7 +1,7 @@
 import {normalizeWebLeads,partitionDiscovery} from "./search-engine.mjs";
 
-export const DIAGNOSTIC_VERSION="2026-11-13.1";
-const FILTER_KEYS=["brand","model","version","yearType","yearFrom","yearTo","priceMin","priceMax","kmMax","originCity","uf","radiusKm","sellerType"];
+export const DIAGNOSTIC_VERSION="2026-11-13.rc1";
+const FILTER_KEYS=["brand","model","version","yearType","yearFrom","yearTo","priceMin","priceMax","kmMin","kmMax","originCity","uf","radiusKm","sellerType","requireRiskEvidence"];
 export function diagnosticFilters(value={}){
   return Object.fromEntries(FILTER_KEYS.map(key=>[key,String(value?.[key]??"").trim().slice(0,100)]));
 }
@@ -26,7 +26,7 @@ export function inspectSearchEvidence(data,filters,now=Date.now()){
       missing,advertisedYear:fields.yearAdvertised??null,
       titleYears:[...new Set(item.title.match(/\b(?:19|20)\d{2}\b/g)||[])],
       category:knownUnavailable(raw)?"excluded":groups.matched.some(x=>x.item===item)?"compatible":groups.excluded.some(x=>x.item===item)?"excluded":"unresolved",
-      pageAvailability:knownUnavailable(raw)?"unavailable":"not-verified"};
+      pageAvailability:knownUnavailable(raw)?"unavailable":item.availability?.status||"unverified",availability:item.availability,fieldEvidence:item.fieldEvidence,extractionError:item.extractionError};
   });
   const timestamp=Date.parse(data?.checkedAt||"");
   const coverage=data?.coverage||{};
@@ -41,7 +41,8 @@ export function inspectSearchEvidence(data,filters,now=Date.now()){
     compatible:groups.matched.filter(x=>x.item.assessment?.bucket==="prequalified"&&!knownUnavailable(rawFor(x.item))).length,
     unresolved:groups.unresolved.length+groups.matched.filter(x=>x.item.assessment?.bucket!=="prequalified").length,excluded:groups.excluded.length,
     incomplete:candidates.filter(x=>["price","km",filters.yearType==="make"?"yearMake":"yearModel","city","uf"].some(k=>!has(x.fields?.[k]))).length,
-    unavailable:listings.filter(x=>x.pageAvailability==="unavailable").length,listings};
+    unavailable:listings.filter(x=>x.pageAvailability==="unavailable").length,publicPagesObserved:listings.filter(x=>x.pageAvailability==="available").length,
+    publicPagesAttempted:count(coverage.publicPagesAttempted),tavilyExtractionUrls:count(coverage.tavilyExtractionUrls),limits:coverage.limits||null,listings};
 }
 
 // Somente GET e os POST de leitura já existentes (/search e /interpret).
@@ -131,7 +132,7 @@ export async function runDiagnostics(options){
       add("extraction","Extração de páginas",evidence.individual&&evidence.extractionSucceeded>0?"ok":"pending",String(evidence.extractionSucceeded??"Não informado")+" extração(ões) concluída(s); "+String(evidence.extractionFailures??"não informado")+" falha(s).","Uma falha de extração pode ser bloqueio, remoção ou indisponibilidade; não distingue sozinha a causa.");
       add("qualified","Compatibilidade preliminar",evidence.compatible?"ok":"pending",evidence.compatible+" pré-qualificado(s), "+evidence.unresolved+" sem comprovação e "+evidence.excluded+" excluído(s).",evidence.compatible?"":"Melhorar cobertura e comprovação das páginas; zero compatíveis não significa que não existam motos à venda.");
       add("fields","Dados dos anúncios",evidence.individual&&evidence.incomplete===0?"ok":"pending",evidence.incomplete+" de "+evidence.individual+" anúncio(s) individual(is) sem preço, KM, ano do tipo escolhido ou localização completos.",evidence.incomplete?"Conferir os campos ausentes por anúncio no relatório; não preencher com os filtros pesquisados.":"");
-      add("availability","Existência dos links",evidence.unavailable?"fail":"pending",evidence.unavailable?evidence.unavailable+" link(s) informado(s) como indisponível(is).":"A resposta atual não comprova HTTP e conteúdo de cada anúncio. Um link indexado pode abrir uma página não encontrada.","Implementar verificação individual de link, página removida, bloqueio e conteúdo de recomendações; conferir a fonte antes de qualificar uma oportunidade.");
+      add("availability","Existência dos links",evidence.unavailable?"fail":evidence.publicPagesObserved>0?"ok":"pending",evidence.publicPagesObserved+" página(s) pública(s) observada(s), "+evidence.unavailable+" indisponível(is). Bloqueios e timeouts permanecem sem comprovação.","Página pública observada não confirma venda ativa. Confira a fonte antes de negociar.");
     });
   }else{
     add("inference","IA remota de verdade","pending","Não executada sem sessão/token válido e filtros completos.");

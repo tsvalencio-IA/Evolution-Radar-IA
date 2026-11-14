@@ -17,6 +17,7 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.ref == 'refs/heads/desenvolvimento/base-evolution-radar'
     name: Validar e publicar site
     runs-on: ubuntu-latest
     environment:

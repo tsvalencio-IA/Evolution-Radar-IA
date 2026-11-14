@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import {readFileSync} from "node:fs";
 import {parseLocalIntent,mergeIntentFilters} from "../public/local-intent.mjs";
 
 test("identifica Honda CG Titan ano exato e preserva cidade quando não citada",()=>{
@@ -67,4 +68,45 @@ test("Kawasaki nova limpa limites antigos de Yamaha sem apagar localização",()
  assert.equal(f.yearFrom,"2021");assert.equal(f.yearTo,"2021");
  assert.equal(f.sellerType,"all");assert.equal(f.originCity,"São José do Rio Preto");assert.equal(f.uf,"SP");
  assert.equal(f.radiusKm,"150");
+});
+
+test("regressão Codex: modelo Honda XRE desconhecido não pode herdar CG 160 Fan",()=>{
+  const old={brand:"Honda",model:"CG 160",version:"Fan",yearFrom:"2024",yearTo:"2024",
+    originCity:"São José do Rio Preto",uf:"SP",radiusKm:"50"};
+  const parsed=parseLocalIntent("Honda XRE 300 2020 em Campinas",old);
+  assert.equal(parsed.filters.brand,"Honda");
+  assert.equal(parsed.filters.model,undefined);
+  assert.equal(parsed.needsRemoteModel,true);
+  assert.equal(parsed.filters.originCity,"Campinas");
+  const noBrand=parseLocalIntent("XRE 300 2020 em Campinas",old);
+  assert.equal(noBrand.needsRemoteModel,true);
+  assert.equal(noBrand.modelCue,"xre");
+  assert.equal(parsed.modelCue,"xre");
+  const partial=parseLocalIntent("Honda em Campinas",old);
+  assert.equal(partial.needsRemoteModel,false);
+  const merged=mergeIntentFilters(old,partial.filters);
+  assert.equal(merged.model,"CG 160");
+  assert.equal(merged.originCity,"Campinas");
+  const app=readFileSync(new URL("../public/app.js",import.meta.url),"utf8");
+  assert.match(app,/completeLocal=local\.recognized===true&&!local\.needsRemoteModel/);
+});
+test("regressão Codex: ano mínimo, máximo e exato são semanticamente diferentes",()=>{
+  const cases=[
+    ["Honda XRE 300 a partir de 2020 em Campinas","2020",""],
+    ["Honda XRE 300 desde 2020 em Campinas","2020",""],
+    ["Honda XRE 300 2020 em diante em Campinas","2020",""],
+    ["Honda XRE 300 até 2022 em Campinas","","2022"],
+    ["Honda XRE 300 2020 em Campinas","2020","2020"]
+  ];
+  for(const [message,from,to] of cases){
+    const out=parseLocalIntent(message);
+    assert.deepEqual(out.warnings,[],message);
+    assert.equal(out.filters.yearFrom,from,message);
+    assert.equal(out.filters.yearTo,to,message);
+  }
+  const old={brand:"Honda",model:"XRE 300",yearFrom:"2015",yearTo:"2024",originCity:"Campinas",uf:"SP"};
+  const from=parseLocalIntent("A partir de 2020",old);
+  const merged=mergeIntentFilters(old,from.filters);
+  assert.equal(merged.yearFrom,"2020");
+  assert.equal(merged.yearTo,"");
 });

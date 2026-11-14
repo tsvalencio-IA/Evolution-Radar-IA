@@ -7,8 +7,11 @@ import {workspaceConfig} from "../../public/workspace-config.js";
 
 const owner=workspaceConfig.ownerUid,uid="approved-tester-001",mail="tester@example.test";
 const rules=readFileSync(new URL("../../database.rules.json",import.meta.url),"utf8");
+const emulatorHost=process.env.FIREBASE_DATABASE_EMULATOR_HOST||"";
+if(!/^(?:127\.0\.0\.1|localhost):\d{2,5}$/.test(emulatorHost))throw Error("Integração permitida somente com emulador explícito em loopback.");
+const [host,port]=emulatorHost.split(":");
 const env=await initializeTestEnvironment({projectId:"demo-evolution-radar",
-  database:{rules}});
+  database:{host,port:Number(port),rules}});
 after(async()=>await env.cleanup());
 const administrator=env.authenticatedContext(owner,{email:"admin@example.test"}).database();
 const applicant=env.authenticatedContext(uid,{email:mail,email_verified:true}).database();

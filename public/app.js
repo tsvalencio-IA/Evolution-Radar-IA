@@ -7,11 +7,16 @@ import {parseLocalIntent,mergeIntentFilters} from "./local-intent.mjs";
 import {openTeam} from "./team-client.js";
 import {DEFAULT_PERMISSIONS,PERMISSION_NAMES} from "./team-roles.mjs";
 import {facebookListingUrl,facebookMarketplaceSearch} from "./marketplaces.mjs";
+import {RISK_TYPES,normalizeRiskReport,assessVehicleRisk} from "./vehicle-risk.mjs";
+import {describeGeography} from "./geography.mjs";
+import {readPendingShare,SHARE_KEY} from "./share-target.mjs";
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const LOCAL="evolution-radar-ia-local-v1",THEME="evolution-radar-ia-theme";
 const state={filters:{...emptyFilters},leads:[],history:[],mode:"local",firebase:null,user:null,remoteReady:false,team:null,teamInfo:null,sharedLeads:[],sharedHistory:[],requests:[],members:[],audit:[],accountDeletionReady:false};
 const labels={purchase:"compra",resale:"revenda",transport:"transporte",documents:"documentos",repairs:"reparos",labor:"mão de obra",taxes:"taxas",commissions:"comissões",other:"outros custos"};
 let toastTimer,saveQueue=Promise.resolve(),latestDiscovered=[],lastDiscoveryFilters=null;
+let sessionEpoch=0,searchSequence=0,intentSequence=0,activeSearch=null,editingRisk=null;
+function invalidateSearch(){searchSequence++;intentSequence++;activeSearch?.abort();activeSearch=null;const b=$("#automaticSearchButton");if(b){b.disabled=false;b.textContent="Pesquisar motos agora";}const a=$("#assistantSend");if(a){a.disabled=false;a.textContent="Interpretar e pesquisar";}}
 const esc=x=>String(x??"").replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
 function notice(message){const t=$("#toast");t.textContent=message;t.hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.hidden=true,6500);}
 function isOwner(){return !!state.teamInfo?.isOwner}
@@ -109,13 +114,20 @@ async function persist(){
   if(state.mode==="loading"){notice("Aguarde a leitura inicial dos dados remotos.");return;}
   if(state.mode!=="remote"){localSave();return;}
   const payload={schemaVersion:1,filters:state.filters,leads:state.leads,updatedAt:new Date().toISOString()};
-  saveQueue=saveQueue.catch(()=>{}).then(()=>state.firebase.save(payload));
+  const uid=state.user?.uid,epoch=sessionEpoch,client=state.firebase;
+  saveQueue=saveQueue.catch(()=>{}).then(()=>{if(uid!==state.user?.uid||epoch!==sessionEpoch)throw Error("Sessão alterada antes da gravação.");return client.save(payload);});
   try{await saveQueue;}catch(e){notice("Falha ao gravar no Firebase. Exporte backup JSON. "+(e?.message||""));}
 }
 function switchView(name){if(name==="admin"&&!isOwner())name="config";$$(".view").forEach(x=>x.classList.toggle("active",x.id==="view-"+name));$$("[data-view]").forEach(x=>{x.classList.toggle("active",x.dataset.view===name);x.setAttribute("aria-current",x.dataset.view===name?"page":"false")});location.hash=name;}
 function setForm(form,obj){for(const [k,v] of Object.entries(obj)){const el=form.elements.namedItem(k);if(!el)continue;if(el.type==="checkbox")el.checked=v===true;else el.value=v===null||v===undefined?"":String(v);}}
-function readFilters(){const f=Object.fromEntries(new FormData($("#filterForm")).entries());f.uf=String(f.uf||"").trim().toUpperCase();return {...emptyFilters,...f};}
+function readFilters(){const f=Object.fromEntries(new FormData($("#filterForm")).entries());f.uf=String(f.uf||"").trim().toUpperCase();f.requireRiskEvidence=$("#filterForm").elements.namedItem("requireRiskEvidence").checked;return {...emptyFilters,...f};}
+function facebookContext(){const f=readFilters();return [f.brand,f.model,f.version,f.yearFrom===f.yearTo?f.yearFrom:[f.yearFrom,f.yearTo].filter(Boolean).join(" a "),[f.originCity,f.uf].filter(Boolean).join("/"),f.radiusKm?"raio "+f.radiusKm+" km":"",f.priceMin?"preço mínimo "+money(f.priceMin):"",f.priceMax?"preço máximo "+money(f.priceMax):"",f.kmMin?"KM mínimo "+f.kmMin:"",f.kmMax?"KM máximo "+f.kmMax:""].filter(Boolean).join(" · ");}
+function updateFacebookContext(){const source=facebookMarketplaceSearch(readFilters());$("#facebookSearchButton").href=source.url;$("#facebookSearchContext").textContent="Confira no Facebook: "+facebookContext()+". O link abre os termos da moto; cidade, raio e demais filtros precisam ser ajustados no Facebook.";}
 function validFilters(f){
+  for(const [min,max,label] of [["priceMin","priceMax","preço"],["kmMin","kmMax","quilometragem"]]){
+    const low=numberOrNull(f[min]),high=numberOrNull(f[max]);
+    if((low!==null&&low<0)||(high!==null&&high<0)||(low!==null&&high!==null&&low>high)){notice("Confira os limites de "+label+".");return false;}
+  }
   const from=numberOrNull(f.yearFrom),to=numberOrNull(f.yearTo);
   if(from!==null&&to!==null&&from>to){notice("Ano inicial não pode ser maior que ano final.");return false;}
   if(f.radiusKm!==""&&(!f.originCity||!f.uf)){notice("Para usar raio, informe cidade de origem e UF.");return false;}
@@ -130,7 +142,7 @@ function displayDiscovery(items,metadata){
   latestDiscovered=items;
   const filters=lastDiscoveryFilters||state.filters;
   const panel=$("#automaticResults"),coverage=metadata.coverage||{};
-  const {matched:visible,unresolved,excluded}=partitionDiscovery(items,filters);
+  const {matched:visible,unresolved,excluded,unavailable}=partitionDiscovery(items,filters);
   const groups={prequalified:[],pending:[]};
   for(const x of visible){
     const bucket=x.item.assessment?.bucket==="prequalified"?"prequalified":"pending";
@@ -158,9 +170,11 @@ function displayDiscovery(items,metadata){
     const status=region.category==="location-unverified"?"Localização e raio não confirmados":
       region.category==="model-unverified"?"Marca, modelo ou versão a confirmar":"";
     const reasons='<p class="card-reason">'+esc([status,...(x.assessment?.reasons||[])].filter(Boolean).join(" · "))+'</p>';
+    const availability=x.availability?.status==="available"?"Página pública observada; venda ativa não confirmada":x.availability?.status==="blocked"?"Página bloqueada; link não validado":"Link não validado";
+    const trace='<details class="evidence-trace"><summary>Disponibilidade e evidências</summary><p class="micro">'+esc(availability)+" · "+esc(x.availability?.checkedAt||"Sem conferência atual")+' · '+esc(x.availability?.reason||"")+'</p><p class="micro">Campos extraídos: '+esc(Object.entries(f).filter(([,v])=>v!==null).map(([k])=>k).join(", ")||"nenhum")+' · Conflitos: '+esc(x.fieldEvidence?.conflicts?.join(", ")||"nenhum identificado")+'. Riscos veiculares não consultados.</p></details>';
     return '<article class="lead-card"><div class="card-top"><h3 class="card-title">'+esc(x.title)+'</h3><span class="chip '+(badge==="Pré-qualificado"?"confirmed":"pending")+'">'+badge+'</span></div>'+
       '<p class="micro">'+esc(x.source)+' · anúncio individual indexado</p>'+fields+
-      '<p class="card-note">'+esc(String(x.snippet||"").slice(0,450))+'</p>'+reasons+
+      '<p class="card-note">'+esc(String(x.snippet||"").slice(0,450))+'</p>'+reasons+trace+
       '<div class="card-actions"><a class="btn secondary small" target="_blank" rel="noopener noreferrer" href="'+esc(x.url)+'">Ver fonte original</a>'+
       '<button type="button" class="btn small" data-discovery="'+items.indexOf(x)+'">Investigar e registrar</button></div></article>';
   };
@@ -186,8 +200,10 @@ function displayDiscovery(items,metadata){
   const pending=unresolved.length?'<section><div class="group-head"><h2>Anúncios individuais a conferir</h2><span>'+unresolved.length+'</span></div>'+
     '<p class="micro">Localização ou modelo ainda sem comprovação. Estes anúncios não estão classificados como compatíveis com os filtros.</p>'+
     '<div class="cards">'+unresolved.map(card).join("")+'</div></section>':"";
-  panel.innerHTML=header+(visible.length?sections:
-    '<div class="empty-state">Nenhum anúncio comprovou os critérios e a localização dentro do raio.</div>')+pending+suppressed;
+  const removed=unavailable.length?'<details class="suppressed-evidence"><summary>Indisponíveis ou removidos ('+unavailable.length+')</summary>'+unavailable.map(({item:x})=>'<p class="micro">'+esc(x.title)+' · '+esc(x.availability.reason)+' · '+esc(x.availability.checkedAt||"Sem data")+'</p>').join("")+'</details>':"";
+  const budget=coverage.limits?'<p class="micro">Consumo desta resposta: '+esc(coverage.queriesAttempted??"?")+' buscas; '+esc(coverage.publicPagesAttempted??"?")+' páginas públicas; '+esc(coverage.tavilyExtractionUrls??"?")+' URLs de extração Tavily. '+(metadata.cache===true?'Resposta em cache.':'')+'</p>':"";
+  panel.innerHTML=header+budget+(visible.length?sections:
+    '<div class="empty-state">Nenhum anúncio comprovou os critérios e a localização dentro do raio.</div>')+pending+removed+suppressed;
 }
 
 async function automaticSearch({requestText=""}={}){
@@ -204,6 +220,8 @@ async function automaticSearch({requestText=""}={}){
     return;
   }
   const button=$("#automaticSearchButton"),output=$("#automaticResults");
+  activeSearch?.abort();const sequence=++searchSequence,epoch=sessionEpoch,uid=state.user?.uid,controller=new AbortController();activeSearch=controller;
+  const current=()=>sequence===searchSequence&&epoch===sessionEpoch&&uid===state.user?.uid&&canUse("search");
   button.disabled=true;button.textContent="Pesquisando...";
   output.innerHTML='<p class="micro">Consultando a web. Nenhum resultado será tratado como anúncio verificado sem inspeção individual.</p>';
   try{
@@ -213,15 +231,16 @@ async function automaticSearch({requestText=""}={}){
     const user=firebaseApp?sdkAuth.getAuth(firebaseApp).currentUser:null;
     if(!user)throw Error("Entre na conta Firebase antes de pesquisar.");
     const token=await user.getIdToken();
+    if(!current())return;
     const uri=new URL("/search",searchWorkerUrl);
     if(uri.protocol!=="https:")throw Error("Conector precisa usar HTTPS.");
-    const controller=new AbortController();
     const abort=setTimeout(()=>controller.abort(),55000);
     let res;
     try{
       res=await fetch(uri,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},body:JSON.stringify({filters:f}),signal:controller.signal,cache:"no-store"});
     }finally{clearTimeout(abort);}
     const data=await res.json();
+    if(!current())return;
     if(!res.ok)throw Error(String(data?.error||"Erro ao consultar o serviço de pesquisa"));
     lastDiscoveryFilters=f;
     const items=normalizeWebLeads(data?.items);
@@ -241,16 +260,18 @@ async function automaticSearch({requestText=""}={}){
       notice("A consulta apareceu, mas o histórico não foi salvo: "+(e?.message||"erro"));
     }
   }catch(e){
+    if(!current())return;
     latestDiscovered=[];
     output.innerHTML='<div class="empty-state">'+esc(e?.message||"Pesquisa indisponível")+'</div>';
     $("#autoSearchState").textContent="Consulta não concluída";
   }finally{
-    button.disabled=false;button.textContent="Pesquisar motos agora";
+    if(activeSearch===controller){activeSearch=null;button.disabled=false;button.textContent="Pesquisar motos agora";}
   }
 }
 function registerDiscovery(index){
   const item=latestDiscovered[index];
   if(!item||item.pageType!=="individual-candidate")return;
+  if(state.user&&!canUse("create"))return notice("Seu perfil não permite registrar anúncios.");
   openLead(null);
   setForm($("#leadForm"),{
     brand:item.fields?.brand||"",model:item.fields?.model||"",version:item.fields?.version||"",
@@ -272,7 +293,8 @@ function renderHistory(){
   panel.innerHTML='<div class="cards">'+entries.slice(0,50).map((x,i)=>{
     const f=x.filters||{},name=[f.brand,f.model,f.version].filter(Boolean).join(" ");
     const count=Array.isArray(x.items)?x.items.length:0;
-    return '<article class="lead-card"><h3 class="card-title">'+esc(name||"Pesquisa")+'</h3><p class="micro">'+esc(x.createdAt||x.checkedAt||"Sem data")+' · '+count+' páginas indexadas</p>'+
+    const rawDate=x.createdAt||x.checkedAt,date=new Date(rawDate),dateLabel=Number.isFinite(date.getTime())?date.toLocaleString("pt-BR"):"Sem data";
+    return '<article class="lead-card"><h3 class="card-title">'+esc(name||"Pesquisa")+'</h3><p class="micro">'+esc(dateLabel)+' · '+count+' páginas indexadas</p>'+
       (x.requestText?'<p class="card-note">'+esc(x.requestText)+'</p>':"")+
       '<div class="card-actions"><button class="btn secondary small" type="button" data-history="'+i+'">Reabrir resultados</button></div></article>';
   }).join("")+'</div>';
@@ -284,6 +306,8 @@ async function assistantSearch(){
   if(state.mode!=="remote"||!state.user){label.textContent="Entre na conta Firebase e aguarde a sincronização antes de pesquisar.";return;}
   if(!searchWorkerUrl){label.textContent="Worker de pesquisa ainda não configurado.";return;}
   button.disabled=true;button.textContent="Interpretando...";
+  const epoch=sessionEpoch,sequence=++intentSequence,uid=state.user?.uid;
+  const current=()=>epoch===sessionEpoch&&sequence===intentSequence&&uid===state.user?.uid&&canUse("search");
   // Não confundir os resultados salvos da consulta anterior com a nova solicitação.
   latestDiscovered=[];
   $("#automaticResults").innerHTML='<div class="empty-state">Aguardando a nova pesquisa. Resultados anteriores permanecem no histórico do Firebase.</div>';
@@ -297,8 +321,10 @@ async function assistantSearch(){
       return;
     }
     let interpreted=local.filters;
-    const completeLocal=!!(interpreted.brand&&interpreted.model);
+    const locallyMerged=mergeIntentFilters(saved,interpreted);
+    const completeLocal=local.recognized===true&&!local.needsRemoteModel&&!!(locallyMerged.brand&&locallyMerged.model);
     if(completeLocal){
+      interpreted=locallyMerged;
       // Evita depender de /interpret quando o pedido já pode ser interpretado localmente.
       // A busca de anúncios continua no endpoint autenticado /search.
       localMode=true;
@@ -318,6 +344,7 @@ async function assistantSearch(){
           });
         }finally{clearTimeout(abort);}
         const data=await res.json();
+        if(!current())return;
         if(!res.ok)throw Error("HTTP "+res.status+": "+(data?.code?data.code+" — ":"")+(data?.detail||data?.error||"IA indisponível"));
         if(!data?.filters||typeof data.filters!=="object")throw Error("A IA não devolveu filtros válidos.");
         interpreted=data.filters;
@@ -327,6 +354,14 @@ async function assistantSearch(){
           " Nenhuma nova pesquisa foi feita. Os filtros visíveis continuam sendo os da consulta anterior. "+
           "Você ainda pode usar os filtros manuais.";
         $("#autoSearchState").textContent="Interpretação pela IA falhou; nenhuma nova pesquisa";
+        return;
+      }
+    }
+    if(!current())return;
+    if(local.needsRemoteModel&&local.modelCue){
+      const model=String(interpreted.model??"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9]/g,"");
+      if(!model.includes(local.modelCue)){
+        label.textContent="O modelo citado não foi confirmado pela IA. Confira a marca e o modelo exatos; nenhuma pesquisa foi iniciada.";
         return;
       }
     }
@@ -343,16 +378,18 @@ async function assistantSearch(){
     setForm($("#filterForm"),f);
     state.filters=f;
     await persist();
+    if(!current())return;
     renderAll();
     label.textContent=(localMode?"Interpretação local gratuita. ":"Interpretação por IA remota. ")+
       "Buscando anúncios na web; não são resultados simulados...";
     await automaticSearch({requestText:prompt});
+    if(!current())return;
     const result=$("#autoSearchState").textContent;
     label.textContent=(localMode?"Interpretação local gratuita. ":"IA remota. ")+result+
       ". Confira os filtros e os links de origem: resultados indexados não comprovam disponibilidade.";
   }catch(e){
     label.textContent="Pesquisa não concluída: "+(e?.message||"erro")+". Os filtros manuais continuam disponíveis.";
-  }finally{button.disabled=false;button.textContent="Interpretar e pesquisar";}
+  }finally{if(sequence===intentSequence){button.disabled=false;button.textContent="Interpretar e pesquisar";}}
 }
 function enableVoiceInput(){
   const Rec=window.SpeechRecognition||window.webkitSpeechRecognition;
@@ -372,9 +409,13 @@ function summarize(){const out={compatible:[],pending:[],outside:[]};for(const l
 function renderCounts(groups){$("#statConfirmed").textContent=groups.compatible.length;$("#statPending").textContent=groups.pending.length;$("#statOutside").textContent=groups.outside.length;}
 function card(x,bucket){
   const url=canonicalUrl(x.url);
+  const risk=assessVehicleRisk(x.riskReport),geo=describeGeography(x,state.filters);
+  const riskLabel=risk.bucket==="eliminated"?"Eliminada por ocorrência comprovada":risk.bucket==="absence-in-scope"?"Ausência de ocorrências no escopo consultado":"Investigação veicular pendente";
+  const riskDetail='<details class="evidence-trace"><summary>'+esc(riskLabel)+'</summary>'+Object.entries(risk.report.items).map(([key,value])=>'<p class="micro">'+esc(RISK_TYPES[key])+': '+esc({unknown:"Desconhecido / não consultado",occurrence:"Ocorrência comprovada","absence-in-scope":"Ausência no escopo"}[value.status])+(value.source?' · '+esc(value.source)+' · '+esc(value.reference)+' · '+esc(value.checkedAt)+' · '+esc(value.scope):'')+'</p>').join("")+'</details>';
+  const geoText='Município: '+(geo.municipality?[geo.municipality.city,geo.municipality.uf].join('/'):'não identificado com segurança')+' · Estimativa entre sedes: '+(geo.estimated?geo.estimated.km.toFixed(1)+' km em linha reta':'não aferida')+' · Distância conferida: '+(geo.verified?geo.verified.km+' km ('+(geo.verified.kind==='route'?'rota rodoviária':'linha reta')+'), '+geo.verified.source+', '+geo.verified.checkedAt:geo.legacyDeclaration?'declaração antiga sem fonte/data':'não verificada');
   const year=x.yearMake||x.yearModel?(x.yearMake??"?")+"/"+(x.yearModel??"?"):"Não informado";
   const meta=[["Ano",year],["KM",x.km==null?"Não informado":Number(x.km).toLocaleString("pt-BR")],["Cidade",(x.city||"Não informada")+(x.uf?"/"+x.uf:"")],["Fonte",x.source||"Não informada"],["Evidência",x.evidence==="page"?"Marcada como conferida":x.evidence==="provided"?"Link não conferido":"Índice/listagem"],["Consulta",x.observedAt||"Não informada"]];
-  return '<article class="lead-card"><div class="card-top"><h3 class="card-title">'+esc([x.brand,x.model,x.version].filter(Boolean).join(" "))+'</h3><span class="chip '+(bucket==="compatible"?"confirmed":bucket)+'">'+(bucket==="compatible"?"Marcada como conferida":bucket==="pending"?"Pendente":"Fora do filtro")+'</span></div><div class="card-price">'+esc(money(x.price))+'</div><div class="card-meta">'+meta.map(([a,b])=>'<span>'+esc(a)+': <b>'+esc(b)+'</b></span>').join("")+'</div><p class="card-reason">'+esc(x.assessment.reasons.join(" · "))+'</p>'+(x.notes?'<p class="card-note">'+esc(x.notes)+'</p>':"")+'<div class="card-actions">'+(url?'<a class="btn secondary small" target="_blank" rel="noopener noreferrer" href="'+esc(url)+'">Abrir fonte ↗</a>':'<span class="chip">Sem link individual</span>')+'<button class="btn small" data-action="edit" data-id="'+esc(x.id)+'">Editar</button><button class="btn small" data-action="delete" data-id="'+esc(x.id)+'">Excluir</button></div></article>';
+  return '<article class="lead-card"><div class="card-top"><h3 class="card-title">'+esc([x.brand,x.model,x.version].filter(Boolean).join(" "))+'</h3><span class="chip '+(bucket==="compatible"?"confirmed":bucket)+'">'+(risk.bucket==="eliminated"?"Eliminada":bucket==="compatible"?"Marcada como conferida":bucket==="pending"?"Pendente":"Fora do filtro")+'</span></div><div class="card-price">'+esc(money(x.price))+'</div><div class="card-meta">'+meta.map(([a,b])=>'<span>'+esc(a)+': <b>'+esc(b)+'</b></span>').join("")+'</div><p class="card-reason">'+esc(x.assessment.reasons.join(" · "))+'</p><p class="micro">'+esc(geoText)+'</p>'+riskDetail+(x.notes?'<p class="card-note">'+esc(x.notes)+'</p>':"")+'<div class="card-actions">'+(url?'<a class="btn secondary small" target="_blank" rel="noopener noreferrer" href="'+esc(url)+'">Abrir fonte ↗</a>':'<span class="chip">Sem link individual</span>')+'<button class="btn small" data-action="edit" data-id="'+esc(x.id)+'">Editar</button><button class="btn small" data-action="delete" data-id="'+esc(x.id)+'">Excluir</button></div></article>';
 }
 function renderLeads(groups){
   const info=[["compatible","Marcadas como conferidas"],["pending","Oportunidades pendentes"],["outside","Fora dos critérios"]];
@@ -385,12 +426,18 @@ function renderFinanceOptions(){
   el.innerHTML='<option value="">Sem anúncio selecionado</option>'+allLeads().map(x=>'<option value="'+esc(x.id)+'">'+esc([x.brand,x.model,x.version,x.yearModel||"",money(x.price)].filter(Boolean).join(" · "))+'</option>').join("");
   if(allLeads().some(x=>x.id===prev))el.value=prev;
 }
-function renderAll(){const groups=summarize();renderCounts(groups);renderLeads(groups);renderFinanceOptions();renderHistory();setStatus();renderTeamPanel();}
+function renderAll(){const groups=summarize();renderCounts(groups);renderLeads(groups);renderFinanceOptions();renderHistory();setStatus();renderTeamPanel();updateFacebookContext();}
 function openLead(id){
   if(state.user&&!canUse(id?"edit":"create"))return notice("O padrinho ainda não autorizou esta operação.");
   const form=$("#leadForm");form.reset();
+  $("#leadValidation").hidden=true;$("#leadValidation").textContent="";
   const x=allLeads().find(y=>y.id===id);
   if(x){setForm(form,x);$("#leadDialogTitle").textContent="Editar evidência";}else{$("#leadDialogTitle").textContent="Registrar anúncio ou lead";setForm(form,{...state.filters,id:"",url:"",source:"",evidence:"index",price:"",km:"",city:state.filters.originCity,yearMake:"",yearModel:"",distanceKm:"",distanceVerified:false,notes:""});}
+  editingRisk=normalizeRiskReport(x?.riskReport);
+  $("#riskInputs").innerHTML=Object.entries(RISK_TYPES).map(([key,label])=>'<label>'+esc(label)+'<select name="risk_'+key+'"><option value="unknown">Desconhecido / não consultado</option><option value="occurrence">Ocorrência comprovada</option><option value="absence-in-scope">Ausência no escopo consultado</option></select></label>').join("");
+  for(const [key,value] of Object.entries(editingRisk.items))form.elements.namedItem("risk_"+key).value=value.status;
+  $("#riskCurrentEvidence").textContent=Object.entries(editingRisk.items).filter(([,v])=>v.status!=="unknown").map(([k,v])=>RISK_TYPES[k]+": "+v.source+" · "+v.reference+" · "+v.checkedAt+" · "+v.scope).join("\n");
+  if(x?.distanceEvidence)setForm(form,{distanceKind:x.distanceEvidence.kind,distanceSource:x.distanceEvidence.source,distanceCheckedAt:x.distanceEvidence.checkedAt.slice(0,10)});
   $("#leadDialog").showModal();
 }
 function readLead(){
@@ -402,16 +449,26 @@ function readLead(){
   d.createdAt=old?.createdAt||new Date().toISOString();
   d.updatedAt=new Date().toISOString();
   d.observedAt=new Date().toISOString().slice(0,10);
+  const distanceUnchanged=old?.distanceEvidence&&old.distanceEvidence.kind===d.distanceKind&&old.distanceEvidence.source===d.distanceSource&&old.distanceEvidence.checkedAt.slice(0,10)===d.distanceCheckedAt;
+  d.distanceEvidence=distanceUnchanged?old.distanceEvidence:{kind:d.distanceKind,source:d.distanceSource,checkedAt:d.distanceCheckedAt};
+  const risk=normalizeRiskReport(editingRisk);
+  for(const key of Object.keys(RISK_TYPES)){
+    const status=d["risk_"+key];
+    if(status!==risk.items[key].status||form.elements.namedItem("replaceRiskEvidence").checked)risk.items[key]={status,source:d.riskSource,reference:d.riskReference,scope:d.riskScope,checkedAt:d.riskCheckedAt};
+  }
+  d.riskReport=risk;d.riskAudit=old?.riskAudit||[];
   return sanitizeLead(d);
 }
 async function storeLead(e){
   e.preventDefault();
+  const feedback=message=>{const out=$("#leadValidation");out.textContent=message;out.hidden=false;out.scrollIntoView({block:"nearest"});};
   if(state.mode==="loading")return notice("Aguarde a sincronização.");
-  const l=readLead();if(!l)return notice("Registro inválido. Confira valores e URL.");
-  if(l.evidence==="page"&&!l.url)return notice("Para marcar página declarada conferida, informe seu link individual.");
+  const l=readLead();if(!l)return feedback("Registro inválido. Confira valores e URL.");
+  for(const key of Object.keys(RISK_TYPES))if($("#leadForm").elements.namedItem("risk_"+key).value!==l.riskReport.items[key].status)return feedback("Para comprovar "+RISK_TYPES[key]+", informe fonte, protocolo, data e escopo da consulta.");
+  if(l.evidence==="page"&&!l.url)return feedback("Para marcar página declarada conferida, informe seu link individual.");
   const existing=allLeads().find(x=>x.id===l.id);
   const dupe=findDuplicate(l,allLeads().filter(x=>x.id!==l.id));
-  if(dupe?.type==="same-url")return notice("Esse link já existe no histórico. Edite o registro existente.");
+  if(dupe?.type==="same-url")return feedback("Esse link já existe no histórico. Edite o registro existente.");
   if(dupe?.type==="possible-same-bike"&&!confirm("Possível duplicidade: preço, KM, ano e cidade iguais. Registrar mesmo assim?"))return;
   try{
     if(state.user){
@@ -431,7 +488,7 @@ async function storeLead(e){
     }
     $("#leadDialog").close();renderAll();switchView("oportunidades");
     notice("Registro salvo. Disponibilidade e documentação ainda não comprovadas.");
-  }catch(err){notice("Não foi possível salvar: "+(err?.message||"erro"));}
+  }catch(err){feedback("Não foi possível salvar: "+(err?.message||"erro"));}
 }
 async function removeLead(id){
   if(state.mode==="loading")return notice("Aguarde a sincronização.");
@@ -482,6 +539,12 @@ function calculate(e){
   out.innerHTML='<strong>Custo total estimado:</strong> '+esc(money(r.totalCost))+'<br><strong>Resultado estimado antes de outras despesas não identificadas:</strong><br><span class="amount">'+esc(money(r.outcome))+'</span><br><strong>Margem sobre a revenda:</strong> '+r.marginPercent.toFixed(2)+'% · <strong>Retorno sobre custo:</strong> '+(r.returnPercent===null?"Não calculável":r.returnPercent.toFixed(2)+"%")+'<p class="micro">Cenário matemático, não garantia de preço final, venda ou lucro líquido. Confirme despesas, riscos, impostos e comparáveis.</p>';
 }
 function theme(){const current=document.documentElement.dataset.theme||"dark",next=current==="dark"?"light":"dark";document.documentElement.dataset.theme=next;localStorage.setItem(THEME,next);}
+function registerFacebookUrl(url,description=""){
+  if(state.user&&!canUse("create"))return notice("O padrinho ainda não autorizou o cadastro de anúncios.");
+  openLead(null);
+  setForm($("#leadForm"),{brand:"",model:"",version:"",city:"",uf:"",yearMake:"",yearModel:"",price:"",km:"",distanceKm:"",distanceVerified:false,
+    source:"Facebook Marketplace",url,evidence:"provided",notes:"Link individual recebido do Facebook Marketplace. Página e dados da moto ainda precisam ser conferidos; os filtros da busca não foram usados como dados do anúncio."+(description?"\nTexto compartilhado, não conferido: "+String(description).slice(0,450):"")});
+}
 async function deleteTeamUser(uid){
   if(!state.accountDeletionReady)return notice("Exclusão definitiva ainda não está habilitada no servidor.");
   if(!isOwner()||!state.team||!state.user)return notice("Somente o administrador pode excluir contas.");
@@ -503,6 +566,10 @@ async function deleteTeamUser(uid){
 function bind(){
   $$("[data-view]").forEach(b=>b.addEventListener("click",()=>switchView(b.dataset.view)));
   $("#themeToggle").addEventListener("click",theme);
+  $("#filterForm").addEventListener("input",()=>{invalidateSearch();updateFacebookContext();});
+  $("#copyFacebookContext").addEventListener("click",async()=>{const value=facebookContext();try{await navigator.clipboard.writeText(value);notice("Filtros copiados. Confira-os nos filtros do Facebook.");}catch{$("#facebookSearchContext").textContent=value;notice("Copie os filtros exibidos no painel Facebook.");}});
+  $("#reviewShare").addEventListener("click",()=>{const pending=readPendingShare(sessionStorage);if(!pending)return notice("Recebimento expirado. Cole novamente o link do anúncio.");registerFacebookUrl(pending.url,pending.description);});
+  $("#dismissShare").addEventListener("click",()=>{sessionStorage.removeItem(SHARE_KEY);$("#pendingShare").hidden=true;});
   $("#filterForm").addEventListener("submit",async e=>{e.preventDefault();const f=readFilters();if(!validFilters(f))return;state.filters=f;await persist();renderAll();notice("Filtros aplicados ao histórico salvo.");});
   $("#automaticSearchButton").addEventListener("click",()=>automaticSearch());
   $("#facebookSearchButton").addEventListener("click",event=>{
@@ -512,10 +579,7 @@ function bind(){
   $("#registerFacebookListing").addEventListener("click",()=>{
     const url=facebookListingUrl($("#facebookListingUrl").value);
     if(!url)return notice("Cole o link individual completo do Marketplace, com /marketplace/item/ e o número do anúncio.");
-    if(state.user&&!canUse("create"))return notice("O padrinho ainda não autorizou o cadastro de anúncios.");
-    openLead(null);
-    setForm($("#leadForm"),{brand:"",model:"",version:"",city:"",uf:"",yearMake:"",yearModel:"",price:"",km:"",distanceKm:"",distanceVerified:false,
-      source:"Facebook Marketplace",url,evidence:"provided",notes:"Link individual recebido do Facebook Marketplace. Página e dados da moto ainda precisam ser conferidos; os filtros da busca não foram usados como dados do anúncio."});
+    registerFacebookUrl(url);
   });
   $("#openDiagnostic").addEventListener("click",event=>{
     // Fragmento não é enviado ao servidor: leva somente os filtros visíveis.
@@ -635,6 +699,7 @@ async function boot(){
   const local=localRead();state.filters=local.filters;state.leads=local.leads;
   try{document.documentElement.dataset.theme=localStorage.getItem(THEME)==="light"?"light":"dark";}catch{}
   setForm($("#filterForm"),state.filters);bind();renderAll();
+  const pendingShare=readPendingShare(sessionStorage);if(pendingShare){$("#pendingShareUrl").textContent=pendingShare.url;$("#pendingShare").hidden=false;}
   void checkAccountDeletionService();
   $("#autoSearchState").textContent=searchWorkerUrl?"Conector disponível":"Conector gratuito ainda não configurado";
   const configured=!!firebaseConfig?.apiKey&&!!firebaseConfig?.projectId&&!!firebaseConfig?.databaseURL;
@@ -644,6 +709,7 @@ async function boot(){
         onAuth:user=>{
           const changed=state.user?.uid!==user?.uid;
           if(changed){
+            sessionEpoch++;invalidateSearch();
             latestDiscovered=[];lastDiscoveryFilters=null;
             $("#automaticResults").innerHTML="";
             state.teamInfo=null;state.sharedLeads=[];state.sharedHistory=[];
@@ -664,7 +730,7 @@ async function boot(){
         onError:err=>{notice("Erro Firebase: "+err.message);state.mode="loading";renderAll();}
       });
       state.team=await openTeam(firebaseConfig,{
-        onAccess:info=>{state.teamInfo=info;renderAll();},
+        onAccess:info=>{if(state.teamInfo?.permissions?.search===true&&(info?.status!=="approved"||info?.permissions?.search!==true)){invalidateSearch();latestDiscovered=[];lastDiscoveryFilters=null;$("#automaticResults").innerHTML="";$("#autoSearchState").textContent="Consulta interrompida: acesso alterado";}state.teamInfo=info;renderAll();},
         onRequests:list=>{state.requests=list;renderTeamPanel();},
         onMembers:list=>{state.members=list;renderTeamPanel();},
         onAudit:list=>{state.audit=list;renderTeamPanel();},

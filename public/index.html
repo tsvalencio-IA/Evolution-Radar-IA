@@ -25,6 +25,7 @@
   <main>
     <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
     <div id="accessNotice" class="notice" hidden role="status" aria-live="polite"></div>
+    <section id="pendingShare" class="panel" hidden><h2>Anúncio recebido do Facebook</h2><p id="pendingShareUrl" class="micro"></p><div class="actions"><button id="reviewShare" class="btn primary" type="button">Revisar anúncio recebido</button><button id="dismissShare" class="btn ghost" type="button">Descartar recebimento</button></div><p class="micro">O recebimento não salva uma oportunidade nem confirma dados da moto.</p></section>
     <section id="view-pesquisa" class="view active">
       <div class="hero"><div><p class="eyebrow">INTELIGÊNCIA DE MERCADO</p><h1>Encontre a próxima oportunidade.</h1></div><span class="hero-art" aria-hidden="true">◎</span></div>
       
@@ -45,20 +46,23 @@
           <label>Ano final<input name="yearTo" type="number" min="1950" max="2100" placeholder="2024"></label>
           <label>Preço mínimo (R$)<input name="priceMin" type="number" min="0" step=".01"></label>
           <label>Preço máximo (R$)<input name="priceMax" type="number" min="0" step=".01" placeholder="18000"></label>
+          <label>KM mínimo<input name="kmMin" type="number" min="0"></label>
           <label>KM máximo<input name="kmMax" type="number" min="0" placeholder="40000"></label>
           <label>Cidade de origem<input name="originCity" placeholder="São José do Rio Preto"></label>
           <label>UF<input name="uf" maxlength="2" placeholder="SP"></label>
-          <label>Raio (km)<input name="radiusKm" type="number" min="0" placeholder="150"><small>Depende de distância confirmada.</small></label>
+          <label>Raio (km)<input name="radiusKm" type="number" min="0" placeholder="150"><small>Aproximação entre sedes municipais; não é rota.</small></label>
           <label>Vendedor<select name="sellerType"><option value="all">Todos</option><option value="particular">Particular</option><option value="loja">Loja / revenda</option></select></label>
           <label>Ordenação<select name="order"><option value="price">Menor preço</option><option value="recent">Mais recente</option><option value="km">Menor KM</option></select></label>
         </div>
+        <label class="checklabel"><input name="requireRiskEvidence" type="checkbox"> Exigir comprovação dos riscos para qualificar registros salvos</label>
         <div class="actions"><button class="btn primary" type="submit">Aplicar filtros</button><button class="btn secondary" type="button" id="generateSearch">Pesquisar nas fontes</button><button class="btn ghost" type="button" id="resetFilters">Limpar</button></div>
       </form>
       <div id="searchLinks" class="panel" hidden></div>
       <section class="panel" id="facebookMarketplacePanel">
         <div class="section-title"><h2>Facebook Marketplace</h2><span>Busca no Facebook</span></div>
         <p class="micro" id="facebookSearchContext">Abra a busca da moto e confira cidade e raio no Facebook. Depois cole o link individual para investigar no Radar.</p>
-        <div class="actions"><a id="facebookSearchButton" class="btn secondary" href="https://www.facebook.com/marketplace/search/" target="_blank" rel="noopener noreferrer">Pesquisar no Marketplace</a></div>
+        <div class="actions"><a id="facebookSearchButton" class="btn secondary" href="https://www.facebook.com/marketplace/search/" target="_blank" rel="noopener noreferrer">Pesquisar no Marketplace</a><button id="copyFacebookContext" class="btn ghost" type="button">Copiar filtros para conferir</button></div>
+        <p class="micro">No Android com PWA instalado e compartilhamento compatível, escolha Evolution Radar ao compartilhar o link completo. No iPhone, ou se o Radar não aparecer, cole o link abaixo. Nenhum novo login do Facebook é solicitado.</p>
         <div class="form-inline"><label>Link do anúncio no Marketplace<input id="facebookListingUrl" type="url" placeholder="https://www.facebook.com/marketplace/item/..."></label><button id="registerFacebookListing" class="btn secondary" type="button">Investigar anúncio no Radar</button></div>
       </section>
       <div class="panel" id="automaticSearch">
@@ -170,10 +174,15 @@
       <label>Fonte<input name="source" placeholder="OLX, Webmotors..."></label>
       <label>Evidência<select name="evidence"><option value="index">Somente índice/listagem</option><option value="provided">Link recebido, não conferido</option><option value="page">Página conferida pelo usuário</option></select></label>
       <label class="wide">Link original<input name="url" type="url" placeholder="https://..."></label>
-      <label>Distância (km)<input name="distanceKm" type="number" min="0" step=".1"></label>
-      <label class="checklabel"><input name="distanceVerified" type="checkbox"> Verificada no mapa</label>
+      <label>Distância conferida (km)<input name="distanceKm" type="number" min="0" step=".1"></label>
+      <label class="checklabel"><input name="distanceVerified" type="checkbox"> Conferida pelo usuário</label>
+      <label>Tipo de distância<select name="distanceKind"><option value="route">Rota rodoviária</option><option value="straight-line">Linha reta entre pontos</option></select></label>
+      <label>Fonte da distância<input name="distanceSource" placeholder="URL do mapa ou referência"></label>
+      <label>Data da conferência<input name="distanceCheckedAt" type="date"></label>
       <label class="wide">Observações<textarea name="notes" rows="3" maxlength="3000" placeholder="Fonte, data, pendências documentais e mecânicas"></textarea></label>
     </div>
+    <details class="risk-editor"><summary>Investigação veicular e critérios eliminatórios</summary><p class="micro">Não consultado é desconhecido. Ausência só vale no escopo e na data da fonte. O Radar não tem fornecedor de consulta veicular contratado. Registre somente evidências que você conferiu.</p><div id="riskInputs" class="form-grid"></div><p class="micro">Para os estados alterados abaixo, informe a referência da consulta conferida:</p><div class="form-grid"><label>Fonte/fornecedor<input name="riskSource" maxlength="300"></label><label>Referência/protocolo<input name="riskReference" maxlength="300"></label><label>Data da consulta<input name="riskCheckedAt" type="date"></label><label class="wide">Escopo coberto<textarea name="riskScope" maxlength="600" rows="2" placeholder="O que a fonte efetivamente consultou; limites de cobertura"></textarea></label></div><label class="checklabel"><input name="replaceRiskEvidence" type="checkbox"> Aplicar referência também às condições já comprovadas</label><p id="riskCurrentEvidence" class="micro"></p></details>
+    <p id="leadValidation" class="notice" role="alert" hidden></p>
     <div class="actions"><button id="cancelLead" class="btn ghost" type="button">Cancelar</button><button class="btn primary" type="submit">Salvar registro</button></div>
   </form>
 </dialog>

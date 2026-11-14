@@ -8,7 +8,10 @@ import {manageMember} from "../../public/team-admin.js";
 import {saveSharedLead,archiveSharedLead,saveSharedSearch} from "../../public/team-data.js";
 
 const rules=readFileSync(new URL("../../database.rules.json",import.meta.url),"utf8");
-const env=await initializeTestEnvironment({projectId:"demo-evolution-radar-team",database:{rules}});
+const emulatorHost=process.env.FIREBASE_DATABASE_EMULATOR_HOST||"";
+if(!/^(?:127\.0\.0\.1|localhost):\d{2,5}$/.test(emulatorHost))throw Error("Integração permitida somente com emulador explícito em loopback.");
+const [host,port]=emulatorHost.split(":");
+const env=await initializeTestEnvironment({projectId:"demo-evolution-radar-team",database:{host,port:Number(port),rules}});
 after(async()=>env.cleanup());
 const owner={uid:workspaceConfig.ownerUid},user={uid:"team-member-1"};
 const ownerDb=env.authenticatedContext(owner.uid,{email:"owner@example.test"}).database();
@@ -44,6 +47,15 @@ test("editar é negado antes da permissão e liberado depois",async()=>{
  await saveSharedLead({db:memberDb,api,user,member,
   lead:{id:"moto-001",brand:"Honda",model:"CG 160",notes:"Alteração autorizada"}});
  assert.equal((await api.get(api.ref(memberDb,root+"/leads/moto-001"))).val().notes,"Alteração autorizada");
+});
+test("riscos conservam escopo e trilha por autor nas edições compartilhadas",async()=>{
+ const member={status:"approved",permissions:{...readonly,edit:true}},source={status:"occurrence",source:"Fixture local",reference:"TEST-RISK-001",scope:"Consulta simulada; nenhum veículo real",checkedAt:"2026-11-13T12:00:00Z"};
+ const lead={id:"moto-risk-001",brand:"Honda",model:"CG 160",riskReport:{schemaVersion:1,items:{auction:source}}};
+ await saveSharedLead({db:memberDb,api,user,member,lead});
+ await saveSharedLead({db:memberDb,api,user,member,lead:{...lead,notes:"Edição sem mudar evidência"}});
+ let saved=(await api.get(api.ref(ownerDb,root+"/leads/"+lead.id))).val();assert.equal(saved.riskReport.items.auction.scope,source.scope);assert.equal(saved.riskAudit.length,1);
+ await saveSharedLead({db:memberDb,api,user,member,lead:{...lead,riskReport:{schemaVersion:1,items:{auction:{status:"unknown"}}}}});
+ saved=(await api.get(api.ref(ownerDb,root+"/leads/"+lead.id))).val();assert.equal(saved.riskAudit.length,2);assert.equal(saved.riskAudit[1].by,user.uid);assert.equal(saved.riskAudit[1].before.items.auction.status,"occurrence");assert.equal(saved.riskAudit[1].after.items.auction.status,"unknown");
 });
 test("pesquisa compartilhada registra autor e timestamp do servidor",async()=>{
  const member={status:"approved",permissions:{...readonly,edit:true}};

@@ -29,13 +29,13 @@ test("extração determinística identifica campos explicitados",()=>{
 });
 test("prequalificado não é aprovação de compra",()=>{
  const fields=parseFacts(sample,"Honda CG 160 Titan",filters);
- const result=gradeListing({title:"Honda CG 160 Titan 2022",fields,extractionStatus:"extracted"},filters);
+ const result=gradeListing({title:"Honda CG 160 Titan 2022",fields,extractionStatus:"extracted",availability:{status:"available"}},filters);
  assert.equal(result.bucket,"prequalified");
  assert.match(result.reasons.join(" "),/confirmar/i);
 });
 test("exclui versão e preço conflitantes",()=>{
  const fields=parseFacts(sample,"Honda CG 160 Titan",filters);
- assert.equal(gradeListing({title:"Honda CG 160 Fan",fields,extractionStatus:"extracted"},filters).bucket,"outside");
+ assert.equal(gradeListing({title:"Honda CG 160 Fan",fields:{...fields,version:"Fan"},extractionStatus:"extracted"},filters).bucket,"outside");
  assert.equal(gradeListing({title:"Honda CG 160 Titan",fields:{...fields,price:18990},extractionStatus:"extracted"},filters).bucket,"outside");
 });
 test("não supõe quilometragem, localização ou preço",()=>{
@@ -75,6 +75,7 @@ test("pesquisa + extração com índice separado e sem revelar chave",async()=>{
    {title:"Catálogo de motos",url:listing,content:"Fan Start Titan"}
   ]});
   if(u.endsWith("/extract"))return Response.json({results:[{url:direct,raw_content:sample}],failed_results:[]});
+  if(u===direct)return new Response("<h1>Honda CG 160 Titan 2022 à venda</h1>",{headers:{"Content-Type":"text/html"}});
   return Response.json({error:"unexpected"},{status:404});
  };
  try{

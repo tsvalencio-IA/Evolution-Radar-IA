@@ -41,5 +41,17 @@ test("atualização remove somente cache do Radar, preservando outros projetos n
    delete:async name=>deleted.push(name)};
  runInNewContext(code,{self,caches,Promise,console});
  let task;events.get("activate")({waitUntil:promise=>{task=promise}});await task;
- assert.deepEqual(deleted,["evolution-radar-ia-static-2026-11-v9","evolution-radar-ia-static-2026-11-v10"]);
+ assert.deepEqual(deleted,["evolution-radar-ia-static-2026-11-v9","evolution-radar-ia-static-2026-11-v10","evolution-radar-ia-static-2026-11-v11"]);
+});
+test("Service Worker não intercepta APIs privadas ou métodos de escrita",()=>{
+ const handler=runServiceWorker();let intercepted=false;
+ for(const request of [new Request("https://tsvalencio-ia.github.io/Evolution-Radar-IA/api/private"),new Request("https://tsvalencio-ia.github.io/Evolution-Radar-IA/",{method:"POST"})])handler({request,respondWith:()=>{intercepted=true;}});
+ assert.equal(intercepted,false);
+});
+test("compartilhamento não deixa URL e texto no endereço da entrada de cache",async()=>{
+ const events=new Map(),writes=[];let work;
+ const self={location:{origin:"https://tsvalencio-ia.github.io",href:"https://tsvalencio-ia.github.io/Evolution-Radar-IA/sw.js"},addEventListener:(name,fn)=>events.set(name,fn)};
+ runInNewContext(code,{self,URL,Response,Promise,fetch:async()=>new Response("receiver"),caches:{open:async()=>({put:async key=>writes.push(key)})}});
+ const pending=[];events.get('fetch')({request:new Request('https://tsvalencio-ia.github.io/Evolution-Radar-IA/receber.html?text=PRIVATE-SHARE'),respondWith:p=>{work=p},waitUntil:p=>pending.push(p)});
+ await work;await Promise.all(pending);assert.deepEqual(writes,['https://tsvalencio-ia.github.io/Evolution-Radar-IA/receber.html']);
 });

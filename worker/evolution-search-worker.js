@@ -1,5 +1,8 @@
-import {assessMunicipalityRadius} from "../public/br-municipios.mjs";
+import {assessMunicipalityRadius,resolveMunicipality} from "../public/br-municipios.mjs";
 import {parseListingFacts,vehicleMatches} from "../public/listing-facts.mjs";
+import {parseLocalIntent} from "../public/local-intent.mjs";
+import {collectCandidates,planQueries,readLimitedBody} from "./search-pipeline.mjs";
+import {withDeadline,consumeRequestBudget} from "./request-guard.mjs";
 /* Evolution Radar IA — Cloudflare Worker
  * Implantação pelo painel da Cloudflare, sem terminal.
  * Segredos obrigatórios no Worker (Settings > Variables and Secrets):
@@ -24,24 +27,31 @@ function queryFor(f){
 }
 function validFilters(f){
   if(!f||typeof f!=="object"||Array.isArray(f))return false;
+  if(["brand","model","originCity","uf"].some(k=>typeof f[k]!=="string"||f[k].length>100))return false;
   if(!text(f.brand)||!text(f.model)||!text(f.originCity)||!text(f.uf))return false;
   if(!/^[a-z]{2}$/i.test(text(f.uf)))return false;
+  if(!resolveMunicipality(f.originCity,f.uf))return false;
   if(f.yearFrom&&!isYear(f.yearFrom))return false;
   if(f.yearTo&&!isYear(f.yearTo))return false;
   if(f.yearFrom&&f.yearTo&&Number(f.yearFrom)>Number(f.yearTo))return false;
-  for(const name of ["priceMin","priceMax","kmMax","radiusKm"]){
+  for(const name of ["priceMin","priceMax","kmMin","kmMax","radiusKm"]){
     if(f[name]!==""&&f[name]!==undefined&&f[name]!==null&&(!Number.isFinite(Number(f[name]))||Number(f[name])<0))return false;
   }
   if(f.priceMin&&f.priceMax&&Number(f.priceMin)>Number(f.priceMax))return false;
+  if(f.kmMin&&f.kmMax&&Number(f.kmMin)>Number(f.kmMax))return false;
   return true;
 }
 async function authenticate(token,env){
-  const result=await fetch("https://identitytoolkit.googleapis.com/v1/accounts:lookup?key="+encodeURIComponent(env.FIREBASE_WEB_API_KEY),{
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),6500);
+  let result,data;
+  try{
+  result=await fetch("https://identitytoolkit.googleapis.com/v1/accounts:lookup?key="+encodeURIComponent(env.FIREBASE_WEB_API_KEY),{
     method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({idToken:token})
+    body:JSON.stringify({idToken:token}),signal:controller.signal
   });
   if(!result.ok)return null;
-  const data=await result.json();
+  data=await result.json();
+  }finally{clearTimeout(timer);}
   const u=data.users?.[0];
   // Mantém o administrador e permite usuários adicionais aprovados explicitamente.
   // ALLOWED_UIDS é opcional e deve ficar somente nos Secrets da Cloudflare.
@@ -60,11 +70,10 @@ async function authenticate(token,env){
     ".json?auth="+encodeURIComponent(token);
   try{
     const control=new AbortController(),timer=setTimeout(()=>control.abort(),6500);
-    let membership;
-    try{membership=await fetch(memberUrl,{signal:control.signal,cache:"no-store"});}
+    let membership,m;
+    try{membership=await fetch(memberUrl,{signal:control.signal,cache:"no-store"});if(membership.ok)m=await membership.json();}
     finally{clearTimeout(timer);}
     if(!membership.ok)return null;
-    const m=await membership.json();
     if(m?.status==="approved"&&m?.permissions?.search===true)return u.localId;
     if(m)return null;
     // Compatibilidade com autorizações manuais anteriores, somente se não
@@ -105,6 +114,7 @@ function sources(results){
 // Pesquisa em duas fases: descobrir URLs; extrair somente anúncios individuais.
 // Dados incompletos sempre permanecem pendentes. Nenhum resultado equivale a compra aprovada.
 const searchMemory=new Map();
+const inFlightSearches=new Map(),requestBudget=new Map();
 export function listingType(url){
   let u;try{u=new URL(url);}catch{return "unknown";}
   const path=u.pathname.replace(/\/+$/,"");
@@ -128,17 +138,24 @@ export function parseFacts(page,title,f){
   return parseListingFacts(page,f);
 }
 export function gradeListing(item,f){
-  const found=item.fields||{},title=normalized(item.title),reject=[],pending=[];
+  const found=item.fields||{},title=normalized(found.vehicleText||item.title),reject=[],pending=[];
+  if(item.availability?.status==="unavailable")return {bucket:"unavailable",reasons:["Página removida, encerrada ou não encontrada: "+item.availability.reason]};
+  if(item.availability?.status!=="available")pending.push("Link individual não validado nesta consulta");
+  if(item.fieldEvidence?.conflicts?.length)pending.push("Dados contraditórios: "+item.fieldEvidence.conflicts.join(", "));
+  if(f.requireRiskEvidence===true||f.requireRiskEvidence==="on"||f.requireRiskEvidence==="true")pending.push("Investigação veicular não consultada por esta busca pública");
+  for(const [key,label] of [["price","Preço total"],["km","Quilometragem"],[f.yearType==="make"?"yearMake":"yearModel","Ano do tipo escolhido"]])if(found[key]===null||found[key]===undefined)pending.push(label+" não comprovado");
+  if(!found.brand&&!found.vehicleText)pending.push("Marca não observada na página individual");
+  if(!found.model&&!found.vehicleText)pending.push("Modelo não observado na página individual");
   const vehicle=vehicleMatches(item,f);
-  if(!vehicle.brand)pending.push("Marca não comprovada no anúncio");
+  if(!vehicle.brand){if(found.brand)reject.push("Marca comprovada diferente do filtro");else pending.push("Marca não comprovada no anúncio");}
   if(!vehicle.model){
     const expected=normalized(f.model).match(/^([a-z]+)\s*(\d{2,4})$/);
     const observed=expected&&title.match(new RegExp("\\b"+expected[1]+"\\s*(\\d{2,4})\\b"));
-    if(observed&&observed[1]!==expected[2])reject.push("Cilindrada/modelo incompatível");
+    if(found.model||(observed&&observed[1]!==expected[2]))reject.push("Cilindrada/modelo incompatível");
     else pending.push("Modelo exato não comprovado");
   }
   if(!vehicle.version){
-    if(/\b(fan|start|titan|cargo)\b/.test(title))reject.push("Versão aparentemente diferente");
+    if(found.version||/\b(fan|start|titan|cargo)\b/.test(normalized(found.model||title)))reject.push("Versão comprovada diferente do filtro");
     else pending.push("Versão não comprovada");
   }
   const y=f.yearType==="make"?found.yearMake:found.yearModel;
@@ -154,9 +171,13 @@ export function gradeListing(item,f){
     if(found.price===null||found.price===undefined)pending.push("Preço mínimo não comprovado");
     else if(found.price<Number(f.priceMin))reject.push("Preço abaixo do mínimo");
   }
-  if(f.kmMax){
+  if(f.kmMax||f.kmMin){
     if(found.km===null||found.km===undefined)pending.push("Quilometragem não comprovada");
-    else if(found.km>Number(f.kmMax))reject.push("KM acima do limite");
+    else if((f.kmMax&&found.km>Number(f.kmMax))||(f.kmMin&&found.km<Number(f.kmMin)))reject.push("KM fora do limite");
+  }
+  if(f.sellerType&&f.sellerType!=="all"){
+    if(!found.sellerType)pending.push("Tipo de vendedor não comprovado");
+    else if(found.sellerType!==f.sellerType)reject.push("Tipo de vendedor diferente do filtro");
   }
   if(!found.city||!found.uf)pending.push("Cidade e UF não comprovadas no anúncio");
   else {
@@ -168,83 +189,8 @@ export function gradeListing(item,f){
   return {bucket:reject.length?"outside":pending.length?"pending":"prequalified",
     reasons:reject.length?reject:pending.length?pending:["Dados da página sugerem compatibilidade; confirmar vendedor, documentação e disponibilidade"]};
 }
-export function searchPlan(f){
-  const core=[text(f.brand),text(f.model),text(f.version)].filter(Boolean).join(" ");
-  const city='"'+text(f.originCity).replace(/"/g,"")+'"';
-  const years=[f.yearFrom,f.yearTo].filter(x=>isYear(x));
-  const query1=[core,years[0]||"","site:olx.com.br",city,text(f.uf),"moto venda"].join(" ");
-  const query2=[core,years[1]||years[0]||"","site:webmotors.com.br/comprar",city,text(f.uf)].join(" ");
-  const middle=years.length===2?String(Math.floor((Number(years[0])+Number(years[1]))/2)):(years[0]||"");
-  const query3=[core,middle,city,text(f.uf),"moto usada venda"].join(" ");
-  return [...new Set([query1,query2,query3].map(x=>x.slice(0,360)))];
-}
-async function tavilyCall(endpoint,body,env){
-  const ac=new AbortController(),timer=setTimeout(()=>ac.abort(),18000);
-  try{
-    const r=await fetch("https://api.tavily.com/"+endpoint,{
-      method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+env.TAVILY_API_KEY},
-      body:JSON.stringify(body),signal:ac.signal});
-    if(!r.ok)throw Error(r.status===429?"Cota de pesquisa atingida":"Erro externo HTTP "+r.status);
-    return await r.json();
-  }finally{clearTimeout(timer);}
-}
-async function collect(f,env){
-  const plan=searchPlan(f);
-  const batches=await Promise.allSettled(plan.map(query=>tavilyCall("search",{
-    query,search_depth:"basic",max_results:15,
-    include_domains:ALLOWED_DOMAINS,include_answer:false,include_raw_content:false
-  },env)));
-  const succeeded=batches.filter(x=>x.status==="fulfilled").map(x=>x.value);
-  if(!succeeded.length)throw Error(batches[0]?.reason?.message||"Nenhuma consulta concluída");
-  const raw=succeeded.flatMap(data=>Array.isArray(data.results)?data.results:[]);
-  let pages=sources(raw);
-  let recovered=false;
-  if(!pages.some(x=>listingType(x.url)==="individual-candidate")){
-    // Uma quarta busca focada só é consumida quando as buscas iniciais devolvem catálogos.
-    recovered=true;
-    const q=[text(f.brand),text(f.model),text(f.version),text(f.yearFrom||""),text(f.originCity),
-      "site:olx.com.br", "R$", "km", "venda"].filter(Boolean).join(" ").slice(0,360);
-    try{
-      const next=await tavilyCall("search",{query:q,search_depth:"basic",max_results:15,
-        include_domains:ALLOWED_DOMAINS,include_answer:false,include_raw_content:false},env);
-      pages=sources([...raw,...(Array.isArray(next.results)?next.results:[])]);
-    }catch{/* Mantém resultados anteriores e informa cobertura parcial. */}
-  }
-  const listed=pages.map(x=>({...x,pageType:listingType(x.url),source:marketplace(x.url),
-      evidence:"index",extractionStatus:"not-attempted"}));
-  const candidates=listed.filter(x=>x.pageType==="individual-candidate");
-  let extracted=[],failures=[];
-  const selected=candidates.slice(0,5);
-  if(selected.length){
-    try{
-      const r=await tavilyCall("extract",{urls:selected.map(x=>x.url),extract_depth:"basic",
-        include_images:false,format:"markdown"},env);
-      extracted=Array.isArray(r.results)?r.results:[];
-      failures=Array.isArray(r.failed_results)?r.failed_results:[];
-    }catch(e){failures=selected.map(x=>({url:x.url,error:String(e.message)}));}
-  }
-  const bodies=new Map(extracted.map(x=>[x.url,String(x.raw_content??"")]));
-  const individual=candidates.map(x=>{
-    const content=bodies.get(x.url),done=!!content;
-    const item={...x,extractionStatus:done?"extracted":selected.some(v=>v.url===x.url)?"failed":"not-attempted",
-      fields:done?parseFacts(content,x.title,f):{price:null,km:null,yearMake:null,yearModel:null,city:null,uf:null}};
-    item.assessment=gradeListing(item,f);
-    return item;
-  });
-  const priority={prequalified:0,pending:1,outside:2};
-  individual.sort((a,b)=>(priority[a.assessment.bucket]??8)-(priority[b.assessment.bucket]??8));
-  const catalogs=listed.filter(x=>x.pageType==="catalog").slice(0,5).map(x=>({...x,
-    assessment:{bucket:"catalog",reasons:["Página de resultados; nenhuma moto individual confirmada"]}}));
-  return {source:"Tavily",query:plan[0],queries:plan,checkedAt:new Date().toISOString(),evidence:"index",
-    items:[...individual,...catalogs].slice(0,20),coverage:{
-      queriesAttempted:plan.length+(recovered?1:0),queriesSucceeded:succeeded.length,indexedLinks:listed.length,
-      individualLinks:individual.length,catalogPages:catalogs.length,
-      extractionAttempted:selected.length,extractionSucceeded:extracted.length,extractionFailures:failures.length,
-      prequalified:individual.filter(x=>x.assessment.bucket==="prequalified").length,
-      regionRadiusVerified:false,regionRadiusMethod:"approximate-municipal-centers"
-    },notice:"Resultado indexado ou extraído de página. Não comprova disponibilidade, documentação ou distância de rota."};
-}
-
+export function searchPlan(f){return planQueries(f);}
+async function collect(f,env){return collectCandidates(f,env,{grade:gradeListing});}
 
 // Interpretação de pedido por IA: retorna apenas campos estruturados e jamais confirma anúncios.
 const intentCache=new Map();
@@ -261,7 +207,7 @@ export function safeIntent(raw){
   for(const key of ["yearFrom","yearTo"]){
     if(/^(19|20)\d{2}$/.test(String(raw[key]??"")))out[key]=String(raw[key]);
   }
-  for(const key of ["priceMin","priceMax","kmMax","radiusKm"]){
+  for(const key of ["priceMin","priceMax","kmMin","kmMax","radiusKm"]){
     const value=raw[key];
     if(value===null||value===undefined||value==="")continue;
     if((typeof value==="number"||typeof value==="string")&&/^\d+(?:\.\d+)?$/.test(String(value))&&Number.isFinite(Number(value))&&Number(value)>=0){
@@ -284,10 +230,11 @@ async function interpretRequest(message,uid,env){
   const cacheKey=uid+":"+prompt.toLocaleLowerCase("pt-BR");
   const saved=intentCache.get(cacheKey);
   if(saved&&Date.now()-saved.time<600000)return response({...saved.data,cache:true});
+  if(!consumeRequestBudget(requestBudget,"intent:"+uid,{limit:6}))return response({error:"Limite temporário de interpretação atingido. Aguarde antes de repetir.",code:"INTENT_REQUEST_LIMIT"},429);
   try{
-    const model=await env.AI.run("@cf/zai-org/glm-4.7-flash",{
+    const model=await withDeadline(()=>env.AI.run("@cf/zai-org/glm-4.7-flash",{
       messages:[
-        {role:"system",content:"Você extrai exclusivamente filtros de pesquisa de motos usadas de um pedido em português brasileiro. Responda APENAS com um objeto JSON válido sem markdown, sem texto adicional, com as chaves opcionais: brand, model, version, yearType (model ou make), yearFrom, yearTo, priceMin, priceMax, kmMax, originCity, uf, radiusKm, sellerType (all, particular, loja). Nunca invente filtros ausentes. Se o pedido citar um único ano, use yearFrom e yearTo iguais. Dinheiro em reais como número simples (ex: oito mil = 8000). Cidade e UF apenas se explicitamente fornecidas ou inequivocamente identificáveis pelo nome geográfico. Se estiver ambíguo, omita o campo."},
+        {role:"system",content:"Você extrai exclusivamente filtros de pesquisa de motos usadas de um pedido em português brasileiro. Responda APENAS com um objeto JSON válido sem markdown, sem texto adicional, com as chaves opcionais: brand, model, version, yearType (model ou make), yearFrom, yearTo, priceMin, priceMax, kmMin, kmMax, originCity, uf, radiusKm, sellerType (all, particular, loja). Nunca invente filtros ausentes. Se o pedido citar ano exato, use yearFrom e yearTo iguais; se disser a partir de/desde um ano, use apenas yearFrom; se disser até um ano, use apenas yearTo. Dinheiro em reais como número simples (ex: oito mil = 8000). Cidade e UF apenas se explicitamente fornecidas ou inequivocamente identificáveis pelo nome geográfico. Se estiver ambíguo, omita o campo."},
         {role:"user",content:prompt}
       ],
       // A GLM usa raciocínio por padrão. Desativá-lo evita consumir o limite
@@ -295,12 +242,22 @@ async function interpretRequest(message,uid,env){
       chat_template_kwargs:{enable_thinking:false},
       response_format:{type:"json_object"},
       max_completion_tokens:650,temperature:0,stream:false
-    });
+    }),18000,"AI_TIMEOUT");
     const raw=intentText(model),start=raw.indexOf("{"),end=raw.lastIndexOf("}");
     if(start<0||end<=start)throw Error("AI_EMPTY_RESPONSE");
     let parsed;
     try{parsed=JSON.parse(raw.slice(start,end+1));}catch{throw Error("AI_INVALID_JSON");}
-    const filters=safeIntent(parsed);
+    const filters=safeIntent(parsed),local=parseLocalIntent(prompt);
+    if(local.warnings.length)return response({error:"Pedido ambíguo. Confira os limites e as unidades.",code:"INTENT_NEEDS_CLARIFICATION",warnings:local.warnings},422);
+    for(const key of ["yearFrom","yearTo","yearType","priceMin","priceMax","kmMin","kmMax","radiusKm"]){
+      if(Object.hasOwn(local.filters,key)&&local.filters[key]!=="")filters[key]=local.filters[key];else delete filters[key];
+    }
+    if(local.filters.brand&&filters.brand&&normalized(local.filters.brand)!==normalized(filters.brand))throw Error("AI_INCOMPLETE_FILTERS");
+    for(const key of ["brand","version","originCity","uf"])if(Object.hasOwn(local.filters,key))filters[key]=local.filters[key];
+    if(local.filters.model&&/[A-Za-z]/.test(local.filters.model))filters.model=local.filters.model;
+    if(local.needsRemoteModel&&local.modelCue&&
+      !normalized(filters.model).replace(/[^a-z0-9]/g,"").includes(local.modelCue))
+      return response({error:"Modelo citado não confirmado pela IA; informe o modelo exato.",code:"INTENT_NEEDS_CLARIFICATION"},422);
     if(!filters.brand||!filters.model)throw Error("AI_INCOMPLETE_FILTERS");
     const data={filters,mode:"workers-ai",model:"glm-4.7-flash",notice:"Filtros interpretados por IA; confira os campos antes de considerar qualquer anúncio."};
     if(intentCache.size>30)intentCache.clear();
@@ -311,18 +268,20 @@ async function interpretRequest(message,uid,env){
     // do modelo é exposta. O código distingue erro do modelo de erro de formato.
     const rawCode=String(e?.message||"");
     const code=rawCode==="AI_EMPTY_RESPONSE"?"AI_EMPTY_RESPONSE":
+      rawCode==="AI_TIMEOUT"?"AI_TIMEOUT":
       rawCode==="AI_INVALID_JSON"?"AI_INVALID_JSON":
       rawCode==="AI_INCOMPLETE_FILTERS"?"AI_INCOMPLETE_FILTERS":
       /quota|rate limit|429|capacity|3040/i.test(rawCode)?"AI_CAPACITY_LIMIT":
       "AI_INFERENCE_FAILED";
     const reason={
+      AI_TIMEOUT:"A inferência excedeu 18 segundos; nenhuma repetição automática foi feita.",
       AI_EMPTY_RESPONSE:"O modelo respondeu sem texto utilizável.",
       AI_INVALID_JSON:"O modelo retornou uma resposta que não é JSON válido.",
       AI_INCOMPLETE_FILTERS:"A IA não conseguiu identificar com segurança a marca e o modelo.",
       AI_CAPACITY_LIMIT:"O serviço gratuito de IA atingiu um limite ou está sem capacidade.",
       AI_INFERENCE_FAILED:"Falha de inferência da Cloudflare. Consulte o log do Worker se persistir."
     }[code];
-    console.error("Evolution Radar /interpret:",code,rawCode.slice(0,180));
+    console.error("Evolution Radar /interpret:",code);
     return response({error:"Interpretação pela IA não concluída.",code,detail:reason},code==="AI_CAPACITY_LIMIT"?503:502);
   }
 }
@@ -423,7 +382,7 @@ async function deleteRegisteredUser(payload,token,env){
 export default {
   async fetch(request,env){
     if(request.method==="GET"&&new URL(request.url).pathname==="/health")
-      return response({service:"Evolution Radar IA",version:"2026-11-12.5",capabilities:["search","interpret","municipal-radius","account-deletion"],radiusMethod:"approximate-municipal-centers",status:"online",aiBinding:env.AI?.run?"connected":"missing",aiInference:"not-tested-by-health",accountDeletionConfigured:!!env.FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON});
+      return response({service:"Evolution Radar IA",version:"2026-11-13.rc1",capabilities:["search","interpret","municipal-radius","account-deletion","page-availability","field-evidence","bounded-search"],radiusMethod:"approximate-municipal-centers",status:"online",aiBinding:env.AI?.run?"connected":"missing",aiInference:"not-tested-by-health",accountDeletionConfigured:!!env.FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON});
     if(request.method==="OPTIONS")return new Response(null,{status:204,headers:cors});
     const endpoint=new URL(request.url).pathname;
     if(!["/search","/interpret","/admin/delete-user"].includes(endpoint)||request.method!=="POST")return response({error:"Endpoint inexistente"},404);
@@ -436,21 +395,26 @@ export default {
     if(!valid)return response({error:"Usuário não autorizado"},403);
     if(endpoint==="/admin/delete-user"&&valid!==String(env.ALLOWED_UID))return response({error:"Somente o administrador pode excluir contas."},403);
     let payload;
-    try{if(Number(request.headers.get("Content-Length")||0)>4000)return response({error:"Requisição muito grande"},413);payload=await request.json();}catch{return response({error:"JSON inválido"},400);}
+    try{if(Number(request.headers.get("Content-Length")||0)>4000)return response({error:"Requisição muito grande"},413);const raw=await readLimitedBody(request,4000);if(raw.truncated)return response({error:"Requisição muito grande"},413);payload=JSON.parse(raw.text);}catch{return response({error:"JSON inválido"},400);}
     if(endpoint==="/admin/delete-user")return deleteRegisteredUser(payload,token,env);
     if(endpoint==="/interpret")return interpretRequest(payload?.message,valid,env);
     if(!validFilters(payload?.filters))return response({error:"Informe marca, modelo, cidade e UF válidos"},400);
-    // Limite de consumo: cada consulta faz até 3 buscas básicas e até 5 extrações básicas.
+    // Até 4 buscas básicas, 5 páginas públicas e 5 URLs de extração por consulta.
     // Repetições no mesmo isolate dentro de 10 min usam cache após validar Firebase.
     const f=payload.filters;
-    const cacheKey=JSON.stringify([f.brand,f.model,f.version,f.yearType,f.yearFrom,f.yearTo,f.priceMin,f.priceMax,f.kmMax,f.originCity,f.uf,f.radiusKm,f.sellerType]);
+    const cacheKey=JSON.stringify([f.brand,f.model,f.version,f.yearType,f.yearFrom,f.yearTo,f.priceMin,f.priceMax,f.kmMin,f.kmMax,f.originCity,f.uf,f.radiusKm,f.sellerType,f.requireRiskEvidence]);
     const entry=searchMemory.get(cacheKey);
     if(entry&&Date.now()-entry.time<600000)return response({...entry.data,cache:true});
+    const running=inFlightSearches.get(cacheKey);
+    if(!running&&!consumeRequestBudget(requestBudget,"search:"+valid))return response({error:"Limite temporário de consultas atingido. Aguarde antes de repetir.",code:"SEARCH_REQUEST_LIMIT"},429);
     try{
-      const data=await collect(f,env);
+      const operation=running||collect(f,env);
+      if(!running)inFlightSearches.set(cacheKey,operation);
+      const data=await operation;
       if(searchMemory.size>40)searchMemory.clear();
       searchMemory.set(cacheKey,{time:Date.now(),data});
-      return response({...data,cache:false});
-    }catch(e){return response({error:"Consulta externa não concluída: "+text(e?.message||"erro",160)},502);}
+      return response({...data,cache:false,coalesced:!!running});
+    }catch(e){const code=/^[A-Z0-9_]{1,60}$/.test(e?.code||"")?e.code:"SEARCH_FAILED";return response({error:"Consulta externa não concluída.",code,coverage:e?.coverage||null},code==="TAVILY_RATE_LIMIT"?429:502);}
+    finally{if(!running)inFlightSearches.delete(cacheKey);}
   }
 };
