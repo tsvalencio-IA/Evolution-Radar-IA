@@ -42,6 +42,22 @@ export function resolveMunicipality(name,uf=""){
  if(state)return byKey.get(state+"|"+normalized)||null;
  return byName.get(normalized)||null;
 }
+export function municipalitiesInText(text,uf=""){
+ const source=" "+normalizeMunicipalityName(text)+" ",found=[];
+ const explicit=source.match(/\b(?:UF|ESTADO)\s+(\w{2})\b/);
+ const state=String(uf||explicit?.[1]||"").toUpperCase();
+ for(const point of byKey.values()){
+   const name=normalizeMunicipalityName(point.name);
+   if((!state||state===point.uf)&&source.includes(" "+name+" "))found.push(point);
+ }
+ return found.filter(point=>!found.some(other=>other!==point&&other.name.length>point.name.length&&normalizeMunicipalityName(other.name).includes(normalizeMunicipalityName(point.name))));
+}
+export function nearbyMunicipalities(filters,limit=2){
+ const from=resolveMunicipality(filters?.originCity,filters?.uf),radius=Number(filters?.radiusKm);
+ if(!from||!Number.isFinite(radius)||radius<=0)return [];
+ return [...byKey.values()].filter(p=>p!==from).map(p=>({...p,distanceKm:municipalityDistanceKm(from,p)}))
+   .filter(p=>p.distanceKm<=radius).sort((a,b)=>a.distanceKm-b.distanceKm).slice(0,Math.max(0,Math.min(5,limit)));
+}
 export function municipalityFromLocationText(content){
  // O campo de localização da OLX vem em várias linhas, com bairro antes da cidade.
  // Links/Markdown são apenas formatação; nunca procurar a cidade no pedido de busca.

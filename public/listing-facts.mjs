@@ -1,4 +1,5 @@
 import {municipalityFromLocationText,assessMunicipalityRadius} from "./br-municipios.mjs";
+import {primaryPageText,detectPageState} from "./page-evidence.mjs";
 
 const plain=value=>String(value??"").replace(/\[([^\]]+)\]\([^)]*\)/g,"$1")
   .replace(/^[ \t]*#{1,6}[ \t]+/gm,"").replace(/[*_]/g,"");
@@ -18,16 +19,20 @@ const unique=values=>{const v=[...new Set(values.filter(x=>x!==null))];return v.
 // equivalentes; 125 não pode casar com 1250 e dados ausentes nunca são presumidos.
 export function vehicleMatches(item,filters){
   const fields=item.fields||{},title=item.title||"";
+  const observed=fields.vehicleText||title;
   return {
-    brand:!filters.brand||matches(filters.brand,title)||matches(filters.brand,fields.brand),
-    model:!filters.model||matches(filters.model,title)||matches(filters.model,fields.model),
-    version:!filters.version||matches(filters.version,title)||matches(filters.version,fields.version)||matches(filters.version,fields.model)
+    brand:!filters.brand||matches(filters.brand,fields.brand||observed),
+    model:!filters.model||matches(filters.model,fields.model||observed),
+    version:!filters.version||(fields.version?matches(filters.version,fields.version):matches(filters.version,fields.model||observed))
   };
 }
 
 export function parseListingFacts(content,filters={}){
   // Evitar que recomendações de outras motos contaminem os campos da moto principal.
-  const source=plain(content).slice(0,16000).split(/(?:^|\n)\s*(?:an[uú]ncios relacionados|veja tamb[eé]m|motos similares|recomendados para voc[eê])\s*(?:\n|$)/i)[0];
+  const pageState=detectPageState(content);
+  const source=pageState.status==="available"?plain(primaryPageText(content)):"";
+  const heading=pageState.status==="available"?String(content).match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i)?.[1]:null;
+  const vehicleText=source?(heading?primaryPageText(heading):source.split(/\r?\n/).find(x=>x.trim())||"").replace(/^#+\s*/,"").trim().slice(0,200):null;
   const labelled=name=>{
     const values=[...source.matchAll(new RegExp("(?:^|\\n)[ \\t]*(?:"+name+")[ \\t]*(?:[:\\-][ \\t]*|[ \\t]+|\\r?\\n[ \\t]*)([^\\n\\r]{1,110})","gmi"))]
       .map(x=>x[1].trim());
@@ -37,20 +42,21 @@ export function parseListingFacts(content,filters={}){
     ...source.matchAll(/R\$\s*([\d.,]+)\s*(?:a vista|à vista)/gi),
     ...source.matchAll(/^[ \t]*R\$[ \t]*([\d.,]+)[ \t]*$/gm)];
   const kms=[...source.matchAll(/(?:quilometragem|km rodados|hod[oô]metro|\bkm[ \t]*:)\s*[:\n-]?\s*([\d.,]+)\s*(?:km)?\b/gi),
-    ...source.matchAll(/\b([\d.,]+)[ \t]*km(?:[ \t]+rodados)?\b/gi)];
+    ...source.matchAll(/\b([\d.,]+)[ \t]*(?:km[ \t]+)?rodad[oa]s\b/gi)];
   const pairs=[...source.matchAll(/\b((?:19|20)\d{2})\s*\/\s*((?:19|20)\d{2})\b/g)].map(x=>x[1]+"/"+x[2]);
   const pair=unique(pairs)?.split("/").map(Number);
   const year=value=>/^(?:19|20)\d{2}$/.test(value||"")?Number(value):null;
   const place=municipalityFromLocationText(source);
   const geo=place?assessMunicipalityRadius(filters,place.name,place.uf):null;
   return {
-    brand:labelled("marca"),model:labelled("modelo"),version:labelled("vers[aã]o"),
+    brand:labelled("marca"),model:labelled("modelo"),version:labelled("vers[aã]o"),vehicleText,
     price:unique(prices.map(x=>amount(x[1]))),km:unique(kms.map(x=>amount(x[1]))),
     yearMake:pair?.[0]??year(labelled("ano(?: de)? fabrica[cç][aã]o")),
     yearModel:pair?.[1]??year(labelled("ano[ -]modelo")),
     // "Ano 2018" não prova separadamente fabricação e modelo.
     yearAdvertised:year(labelled("ano")),
     city:place?.name??null,uf:place?.uf??null,
+    sellerType:/\b(?:tipo de vendedor|vendedor)\s*[:\n]\s*particular\b/i.test(source)?"particular":/\b(?:tipo de vendedor|vendedor)\s*[:\n]\s*(?:loja|revenda|concessionaria)\b/i.test(source)?"loja":null,
     distanceKm:geo?.distanceKm??null,distanceMethod:geo?.method??null
   };
 }

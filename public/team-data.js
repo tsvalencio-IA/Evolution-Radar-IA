@@ -1,5 +1,6 @@
 import {workspaceConfig} from "./workspace-config.js";
 import {safeLeadId,canAccess} from "./team-roles.mjs";
+import {normalizeRiskReport} from "./vehicle-risk.mjs";
 const ROOT="workspaces/"+workspaceConfig.id;
 export function memberAllowed(user,member,action){
   return user?.uid===workspaceConfig.ownerUid||canAccess(member,action);
@@ -19,7 +20,11 @@ export async function saveSharedLead({db,api,user,member,lead}){
     if(!old&&existing)return;
     const basis=existing||old;
     if(basis?.archived)return;
-    return {...item,createdBy:basis?.createdBy||item.createdBy,
+    const before=normalizeRiskReport(basis?.riskReport),after=normalizeRiskReport(lead.riskReport);
+    const riskChanged=JSON.stringify(before)!==JSON.stringify(after);
+    const previous=Array.isArray(basis?.riskAudit)?basis.riskAudit:[];
+    const riskAudit=riskChanged?[...previous,{by:user.uid,at:new Date().toISOString(),before,after}].slice(-20):previous;
+    return {...item,riskAudit,createdBy:basis?.createdBy||item.createdBy,
       createdAt:basis?.createdAt||item.createdAt};
   },{applyLocally:false});
   if(!result.committed)throw Error("Registro modificado por outra pessoa. Atualize antes de editar.");

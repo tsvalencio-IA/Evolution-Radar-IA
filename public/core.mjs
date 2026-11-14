@@ -1,9 +1,11 @@
 import {assessMunicipalityRadius} from "./br-municipios.mjs";
 import {facebookListingUrl,facebookMarketplaceSearch} from "./marketplaces.mjs";
+import {normalizeRiskReport,assessVehicleRisk,RISK_TYPES} from "./vehicle-risk.mjs";
+import {normalizeDistanceEvidence} from "./geography.mjs";
 export const emptyFilters = Object.freeze({
   brand:"", model:"", version:"", yearFrom:"", yearTo:"", yearType:"model",
-  priceMin:"", priceMax:"", kmMax:"", originCity:"", uf:"", radiusKm:"",
-  sellerType:"all", order:"price"
+  priceMin:"", priceMax:"", kmMin:"", kmMax:"", originCity:"", uf:"", radiusKm:"",
+  sellerType:"all", order:"price", requireRiskEvidence:false
 });
 export const costs = Object.freeze(["transport","documents","repairs","labor","taxes","commissions","other"]);
 const fixedFields=["id","brand","model","version","yearMake","yearModel","price","km","city","uf","sellerType","source","url","evidence","observedAt","distanceKm","distanceVerified","notes","createdAt","updatedAt"];
@@ -54,6 +56,9 @@ export function sanitizeLead(input) {
   o.distanceVerified=o.distanceVerified===true;
   for(const k of ["brand","model","version","city","uf","sellerType","source","url","evidence","notes","observedAt","createdAt","updatedAt"]) o[k]=String(o[k]??"").slice(0,k==="notes"?3000:500);
   o.id=String(o.id).slice(0,100);
+  o.riskReport=normalizeRiskReport(input.riskReport);
+  o.distanceEvidence=normalizeDistanceEvidence(input.distanceEvidence);
+  o.riskAudit=Array.isArray(input.riskAudit)?input.riskAudit.slice(-20).map(x=>({by:String(x.by||"").slice(0,128),at:String(x.at||"").slice(0,40),before:normalizeRiskReport(x.before),after:normalizeRiskReport(x.after)})):[];
   return o;
 }
 export function findDuplicate(candidate,existing) {
@@ -68,6 +73,9 @@ export function findDuplicate(candidate,existing) {
 }
 export function evaluateLead(lead, f=emptyFilters) {
   const reasons=[],unknown=[];
+  const risk=assessVehicleRisk(lead.riskReport);
+  if(risk.eliminated.length)reasons.push(...risk.eliminated.map(key=>"Eliminatória comprovada: "+RISK_TYPES[key]));
+  if((f.requireRiskEvidence===true||f.requireRiskEvidence==="on")&&risk.unknown.length)unknown.push("Investigação veicular pendente: "+risk.unknown.map(key=>RISK_TYPES[key]).join(", "));
   const compare=(label,wanted,actual)=>{
     if(!normalized(wanted))return;
     if(!normalized(actual))unknown.push(label+" não informado");
@@ -82,7 +90,7 @@ export function evaluateLead(lead, f=emptyFilters) {
   }
   for(const [key,label,low,high] of [
     ["price","Preço",numberOrNull(f.priceMin),numberOrNull(f.priceMax)],
-    ["km","Quilometragem",null,numberOrNull(f.kmMax)]
+    ["km","Quilometragem",numberOrNull(f.kmMin),numberOrNull(f.kmMax)]
   ]) {
     if(low===null&&high===null)continue;
     const val=numberOrNull(lead[key]);
@@ -98,9 +106,7 @@ export function evaluateLead(lead, f=emptyFilters) {
     if(!sameCity) {
       if(!lead.city||!lead.uf)unknown.push("Cidade/UF não informadas");
       else if(radius!==null&&radius>0){
-        if(lead.distanceVerified===true&&numberOrNull(lead.distanceKm)!==null){
-          if(lead.distanceKm>radius)reasons.push("Distância verificada acima do raio");
-        }else{
+        {
           const geo=assessMunicipalityRadius(f,lead.city,lead.uf);
           if(geo.status==="outside")reasons.push("Município fora do raio (distância aproximada entre sedes)");
           else if(geo.status==="unknown")unknown.push("Localização não reconhecida");
@@ -157,7 +163,7 @@ export function money(v) {
   return v===null||v===undefined||v===""?"Não informado":new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL"}).format(Number(v));
 }
 export function csvExport(leads){
-  const columns=["id","brand","model","version","yearMake","yearModel","price","km","city","uf","sellerType","source","url","evidence","observedAt","distanceKm","distanceVerified","notes"];
+  const columns=["id","brand","model","version","yearMake","yearModel","price","km","city","uf","sellerType","source","url","evidence","observedAt","distanceKm","distanceVerified","notes","distanceEvidence","riskReport"];
   const cell=x=>{let t=String(x??"");if(/^[=+\-@]/.test(t))t="'"+t;return '"'+t.replace(/"/g,'""')+'"';};
-  return "\uFEFF"+columns.join(";")+"\r\n"+leads.map(x=>columns.map(k=>cell(x[k])).join(";")).join("\r\n");
+  return "\uFEFF"+columns.join(";")+"\r\n"+leads.map(x=>columns.map(k=>cell(typeof x[k]==="object"&&x[k]!==null?JSON.stringify(x[k]):x[k])).join(";")).join("\r\n");
 }

@@ -9,7 +9,7 @@ test("Worker de colar na Cloudflare é um módulo independente sem imports de ar
  assert.doesNotMatch(file,/^\s*import\s/m);
  assert.match(file,/const MUNICIPIOS=/);
  assert.match(file,/export default\s*\{/);
- assert.match(file,/2026-11-12\.5/);
+ assert.match(file,/2026-11-13\.rc1/);
 });
 test("Arquivo único mantém exatamente o mesmo health e capacidades do Worker original",async()=>{
  const req=new Request("https://evolution-radar-search.tsvalencio.workers.dev/health");

@@ -53,7 +53,7 @@ export function relevantSearchPage(item){
   let u;try{u=new URL(String(item.url??""));}catch{return false;}
   if(!marketplaceName(u.href)||u.protocol!=="https:")return false;
   if(marketplaceName(u.href)==="Facebook Marketplace"&&classifySearchPage(u.href)==="unknown")return false;
-  const path=decodeURIComponent(u.pathname).normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
+  let path;try{path=decodeURIComponent(u.pathname).normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();}catch{return false;}
   if(/(?:^|\/)(?:imoveis|apartamentos?|casas?|celulares?|smartphones?|eletronicos|informatica|moda|roupas?|moveis|eletrodomesticos|terrenos?|carros|automoveis)(?:\/|$)/.test(path))return false;
   if(classifySearchPage(u.href)==="individual-candidate")return true;
   const title=String(item.title??"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
@@ -68,6 +68,7 @@ export function normalizeWebLeads(raw){
     const title=simple(x.title),url=String(x.url??"").trim(),source=marketplaceName(url);
     if(!source||!title||!/^https:\/\//i.test(url)||!relevantSearchPage({url,title}))return [];
     const canonical=new URL(url); canonical.hash="";
+    if(canonical.username||canonical.password)return [];
     for(const key of [...canonical.searchParams.keys()])if(/^(utm_|fbclid$|gclid$)/i.test(key))canonical.searchParams.delete(key);
     const norm=canonical.toString();
     if(seen.has(norm))return []; seen.add(norm);
@@ -83,18 +84,29 @@ export function normalizeWebLeads(raw){
       brand:typeof raw.brand==="string"?raw.brand.slice(0,100):null,
       model:typeof raw.model==="string"?raw.model.slice(0,110):null,
       version:typeof raw.version==="string"?raw.version.slice(0,100):null,
+      vehicleText:typeof raw.vehicleText==="string"?raw.vehicleText.slice(0,200):null,
       city:typeof raw.city==="string"?raw.city.slice(0,110):null,
-      uf:typeof raw.uf==="string"?raw.uf.slice(0,2):null
+      uf:typeof raw.uf==="string"?raw.uf.slice(0,2):null,
+      sellerType:["particular","loja"].includes(raw.sellerType)?raw.sellerType:null
     };
     const status=["extracted","failed","not-attempted"].includes(x.extractionStatus)?x.extractionStatus:"not-attempted";
-    const validBuckets=["prequalified","pending","outside","catalog"];
-    const assessment=x.assessment&&validBuckets.includes(x.assessment.bucket)?
+    const validBuckets=["prequalified","pending","outside","catalog","unavailable"];
+    let assessment=x.assessment&&validBuckets.includes(x.assessment.bucket)?
       {bucket:x.assessment.bucket,reasons:Array.isArray(x.assessment.reasons)?x.assessment.reasons.filter(y=>typeof y==="string").slice(0,9).map(y=>y.slice(0,160)):[]}:
       {bucket:pageType==="catalog"?"catalog":"pending",reasons:["Informações não conferidas"]};
+    if(assessment.bucket==="prequalified"&&x.availability?.status!=="available")assessment={bucket:"pending",reasons:[...assessment.reasons,"Link sem conferência pública atual"]};
     return [{
       title,url:norm,source,pageType,snippet:String(x.content??"").slice(0,750),
       observedAt:String(x.observedAt??"").slice(0,30),evidence:"index",
       extractionStatus:status,fields,assessment
+      ,availability:{status:["available","unavailable","blocked","unverified"].includes(x.availability?.status)?x.availability.status:x.pageStatus==="unavailable"?"unavailable":"unverified",
+        reason:String(x.availability?.reason||"LINK_NOT_VALIDATED").replace(/[^A-Z0-9_]/g,"").slice(0,60),
+        checkedAt:Number.isFinite(Date.parse(x.availability?.checkedAt||""))?new Date(x.availability.checkedAt).toISOString():null,
+        httpStatus:Number.isInteger(x.availability?.httpStatus)?x.availability.httpStatus:null},
+      fieldEvidence:{conflicts:Array.isArray(x.fieldEvidence?.conflicts)?x.fieldEvidence.conflicts.filter(k=>Object.hasOwn(fields,k)):[],sourceUrl:norm,
+        sources:Object.fromEntries(Object.keys(fields).map(k=>[k,Array.isArray(x.fieldEvidence?.sources?.[k])?x.fieldEvidence.sources[k].filter(s=>["public-html","json-ld","tavily-extract"].includes(s)):[]])),
+        checkedAt:Number.isFinite(Date.parse(x.fieldEvidence?.checkedAt||""))?new Date(x.fieldEvidence.checkedAt).toISOString():null},
+      extractionError:typeof x.extractionError==="string"?x.extractionError.replace(/[^A-Z0-9_]/g,"").slice(0,70):null
     }];
   });
 }
@@ -103,6 +115,7 @@ export function normalizeWebLeads(raw){
 // e pesquisas armazenadas. Nunca promove catálogo ou município desconhecido a oferta.
 export function classifyDiscoveryForFilters(item,filters={}){
   if(!item||item.pageType!=="individual-candidate")return {category:"catalog",distanceKm:null};
+  if(item.availability?.status==="unavailable"||item.assessment?.bucket==="unavailable")return {category:"unavailable",distanceKm:null};
   const f=item.fields||{};
   const area=assessMunicipalityRadius(filters,f.city,f.uf);
   const year=Number(filters.yearType==="make"?f.yearMake:f.yearModel);
@@ -110,7 +123,7 @@ export function classifyDiscoveryForFilters(item,filters={}){
     if((filters.yearFrom&&year<Number(filters.yearFrom))||(filters.yearTo&&year>Number(filters.yearTo)))
       return {category:"outside-filters",distanceKm:area.distanceKm};
   }
-  for(const [field,lower,upper] of [["price",filters.priceMin,filters.priceMax],["km",null,filters.kmMax]]){
+  for(const [field,lower,upper] of [["price",filters.priceMin,filters.priceMax],["km",filters.kmMin,filters.kmMax]]){
     const v=f[field];
     if(v===null||v===undefined)continue;
     if((lower&&v<Number(lower))||(upper&&v>Number(upper)))
@@ -126,12 +139,13 @@ export function classifyDiscoveryForFilters(item,filters={}){
 
 // Dados incompletos continuam investigáveis, sem serem anunciados como dentro do raio.
 export function partitionDiscovery(items,filters){
-  const matched=[],unresolved=[],excluded=[];
+  const matched=[],unresolved=[],excluded=[],unavailable=[];
   for(const item of items){
     const entry={item,region:classifyDiscoveryForFilters(item,filters)};
-    if(item.assessment?.bucket==="outside"||["catalog","out-of-area","outside-filters"].includes(entry.region.category))excluded.push(entry);
+    if(entry.region.category==="unavailable")unavailable.push(entry);
+    else if(item.assessment?.bucket==="outside"||["catalog","out-of-area","outside-filters"].includes(entry.region.category))excluded.push(entry);
     else if(entry.region.category==="in-area")matched.push(entry);
     else unresolved.push(entry);
   }
-  return {matched,unresolved,excluded};
+  return {matched,unresolved,excluded,unavailable};
 }

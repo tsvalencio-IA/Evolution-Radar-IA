@@ -48,3 +48,4 @@ footer{display:flex;justify-content:space-between;gap:10px;border-top:1px solid 
 .suppressed-entry a{margin-left:auto}
 
 .team-danger{color:var(--bad);border-color:var(--bad);background:transparent}.team-danger:hover{background:var(--surface2)}
+.risk-editor,.evidence-trace{border-top:1px solid var(--line);padding:12px 0;margin:12px 0;min-width:0;overflow-wrap:anywhere}.risk-editor summary,.evidence-trace summary{cursor:pointer;font-size:13px;font-weight:700}.risk-editor .form-grid{margin-top:12px}#riskCurrentEvidence{white-space:pre-wrap}.card-top{flex-wrap:wrap}.card-title{overflow-wrap:anywhere;min-width:0}.chip{white-space:normal}.form-grid>label{min-width:0}.form-grid input,.form-grid select,.form-grid textarea{max-width:100%;min-width:0}

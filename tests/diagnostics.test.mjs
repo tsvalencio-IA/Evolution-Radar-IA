@@ -43,7 +43,7 @@ test("cache e data antiga não são nova inferência nem nova coleta comprovada"
 test("anúncio somente indexado e campos ausentes não viram oportunidade comprovada",()=>{
   const evidence=inspectSearchEvidence({items:[{...candidate,title:"Factor 125i ED 2015",fields:{},extractionStatus:"failed",assessment:{bucket:"pending"}}]},filters);
   assert.equal(evidence.compatible,0);assert.equal(evidence.incomplete,1);
-  assert.equal(evidence.listings[0].pageAvailability,"not-verified");
+  assert.equal(evidence.listings[0].pageAvailability,"unverified");
   assert.deepEqual(evidence.listings[0].titleYears,["2015"]);
   assert.deepEqual(evidence.listings[0].missing,["price","km","yearModel","city","uf"]);
 });

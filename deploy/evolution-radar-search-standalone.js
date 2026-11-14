@@ -45,6 +45,22 @@ export function resolveMunicipality(name,uf=""){
  if(state)return byKey.get(state+"|"+normalized)||null;
  return byName.get(normalized)||null;
 }
+export function municipalitiesInText(text,uf=""){
+ const source=" "+normalizeMunicipalityName(text)+" ",found=[];
+ const explicit=source.match(/\b(?:UF|ESTADO)\s+(\w{2})\b/);
+ const state=String(uf||explicit?.[1]||"").toUpperCase();
+ for(const point of byKey.values()){
+   const name=normalizeMunicipalityName(point.name);
+   if((!state||state===point.uf)&&source.includes(" "+name+" "))found.push(point);
+ }
+ return found.filter(point=>!found.some(other=>other!==point&&other.name.length>point.name.length&&normalizeMunicipalityName(other.name).includes(normalizeMunicipalityName(point.name))));
+}
+export function nearbyMunicipalities(filters,limit=2){
+ const from=resolveMunicipality(filters?.originCity,filters?.uf),radius=Number(filters?.radiusKm);
+ if(!from||!Number.isFinite(radius)||radius<=0)return [];
+ return [...byKey.values()].filter(p=>p!==from).map(p=>({...p,distanceKm:municipalityDistanceKm(from,p)}))
+   .filter(p=>p.distanceKm<=radius).sort((a,b)=>a.distanceKm-b.distanceKm).slice(0,Math.max(0,Math.min(5,limit)));
+}
 export function municipalityFromLocationText(content){
  // O campo de localização da OLX vem em várias linhas, com bairro antes da cidade.
  // Links/Markdown são apenas formatação; nunca procurar a cidade no pedido de busca.
@@ -88,6 +104,289 @@ export function assessMunicipalityRadius(filters,city,uf){
  return {status:dist<=radius+1e-9?"inside":"outside",distanceKm:dist,method:"municipal-center"};
 }
 
+const FACEBOOK_HOSTS=new Set(["facebook.com","www.facebook.com","m.facebook.com","web.facebook.com","mbasic.facebook.com"]);
+export function facebookListingUrl(value){
+  try{
+    const url=new URL(String(value||"").trim());
+    if(url.protocol!=="https:"||!FACEBOOK_HOSTS.has(url.hostname)||url.username||url.password)return "";
+    const match=url.pathname.match(/^\/marketplace\/item\/(\d{5,30})\/?$/);
+    return match?"https://www.facebook.com/marketplace/item/"+match[1]+"/":"";
+  }catch{return "";}
+}
+export function facebookMarketplaceSearch(filters={}){
+  const words=[filters.brand,filters.model,filters.version].map(x=>String(x||"").trim().slice(0,100)).filter(Boolean);
+  const from=String(filters.yearFrom||""),to=String(filters.yearTo||"");
+  // Texto não representa aplicação de filtros nativos de ano, localização ou raio.
+  if(/^(?:19|20)\d{2}$/.test(from)&&(!to||to===from))words.push(from);
+  const url=new URL("https://www.facebook.com/marketplace/search/");
+  if(words.length)url.searchParams.set("query",words.join(" "));
+  return {name:"Facebook Marketplace",url:url.href,mode:"external-session",automaticImport:false,
+    location:[filters.originCity,filters.uf].filter(Boolean).join(" / "),radiusKm:String(filters.radiusKm||"")};
+}
+
+const WORD_AMOUNTS={zero:0,um:1,dois:2,tres:3,quatro:4,cinco:5,seis:6,sete:7,oito:8,nove:9,dez:10,onze:11,doze:12,treze:13,quatorze:14,catorze:14,quinze:15,dezesseis:16,dezessete:17,dezoito:18,dezenove:19,vinte:20,trinta:30,quarenta:40,cinquenta:50,sessenta:60,setenta:70,oitenta:80,noventa:90,cento:100,cem:100};
+const QUANTITY_PATTERN="(?:\\d[\\d.,]*|"+Object.keys(WORD_AMOUNTS).join("|")+")(?:\\s*mil)?";
+const qNorm=value=>String(value??"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
+export function quantityNumber(value){
+  const s=qNorm(value).trim(),thousands=/mil$/.test(s),raw=s.replace(/\s*mil$/,"").trim();
+  let amount=Object.hasOwn(WORD_AMOUNTS,raw)?WORD_AMOUNTS[raw]:Number(raw.includes(",")?raw.replace(/\./g,"").replace(",","."):/^\d{1,3}(?:\.\d{3})+$/.test(raw)?raw.replace(/\./g,""):raw);
+  amount*=thousands?1000:1;return Number.isFinite(amount)&&amount>=0?amount:null;
+}
+export function parseIntentQuantities(message){
+  const s=qNorm(message),filters={},warnings=[],evidence=[];
+  const matches=[...s.matchAll(new RegExp("(^|[^a-z0-9])("+QUANTITY_PATTERN+")(?![a-z0-9])","g"))].map(m=>({start:m.index+m[1].length,end:m.index+m[0].length,raw:m[2],value:quantityNumber(m[2])}));
+  const context=token=>{
+    const before=s.slice(Math.max(0,token.start-55),token.start),after=s.slice(token.end,token.end+30);
+    const distance=/^\s*(?:km|quilometros?)\b/.test(after),km=distance||/^\s*rodad[oa]s?\b/.test(after)||/\b(?:quilometragem|km)(?:\s+(?:maxim[oa]|minim[oa]|de|ate|entre|a partir de|no maximo de|no minimo de))*\s*[:=]?\s*$/.test(before);
+    const radius=distance&&/\braio\s*(?:(?:de|ate|maximo)\s*)?$/.test(before);
+    const currency=/r\$\s*$/.test(before)||/^\s*reais\b/.test(after)||/\b(?:preco|valor|orcamento)(?:\s+(?:maxim[oa]|minim[oa]|de|ate|entre|a partir de|no maximo de|no minimo de))*\s*[:=]?\s*(?:r\$\s*)?$/.test(before);
+    return {before,after,type:radius?"radius":km?"km":currency?"price":""};
+  };
+  const assign=(key,value,token)=>{
+    if(value===null||value>10000000)return warnings.push("Valor fora da faixa interpretável; confira a unidade.");
+    if(Object.hasOwn(filters,key)&&filters[key]!==String(value))warnings.push("Limites contraditórios para "+key+"; informe um único limite.");
+    else{filters[key]=String(value);evidence.push({field:key,start:token.start,end:token.end,unit:key.startsWith("price")?"BRL":key==="radiusKm"?"radius-km":"odometer-km"});}
+  };
+  const consumed=new Set();
+  for(let i=0;i<matches.length-1;i++){
+    const a=matches[i],b=matches[i+1],ca=context(a),cb=context(b),between=s.slice(a.end,b.start);
+    if(!/^\s*(?:a|ate|e|-)\s*(?:r\$\s*)?$/.test(between)||!/\b(?:entre|de)\s*(?:r\$\s*)?$/.test(ca.before))continue;
+    const type=ca.type||cb.type;if(!["price","km"].includes(type))continue;
+    if(a.value>b.value)warnings.push("A faixa de "+(type==="km"?"quilometragem":"preço")+" está invertida.");
+    else{assign(type+"Min",a.value,a);assign(type+"Max",b.value,b);}
+    consumed.add(a);consumed.add(b);
+  }
+  for(const token of matches){
+    if(consumed.has(token))continue;
+    const c=context(token);
+    if(c.type==="radius"){if(token.value<=1000)assign("radiusKm",token.value,token);else warnings.push("Informe um raio entre 0 e 1000 km.");continue;}
+    const min=/\b(?:a partir de|pelo menos|no minimo(?: de)?|minim[oa]|acima de)\s*(?:r\$\s*)?$/.test(c.before);
+    const max=/\b(?:ate|no maximo(?: de)?|maxim[oa]|abaixo de|menos de|limite(?: de)?)\s*(?:r\$\s*)?$/.test(c.before);
+    if(c.type){
+      if(min||max||c.type==="price"||token.value===0)assign(c.type+(min?"Min":"Max"),token.value,token);
+      else warnings.push("Quilometragem sem limite claro; diga mínima ou máxima.");
+    }else if((min||max)&&token.value>=3000){
+      // Compatibilidade com pedidos usuais "até 18000"; nunca aplicar quando há unidade KM/raio.
+      assign("price"+(min?"Min":"Max"),token.value,token);
+    }else if((min||max)&&!(token.value>=1950&&token.value<=2100)){
+      warnings.push("Valor sem unidade clara; informe reais, quilometragem ou raio.");
+    }
+  }
+  for(const type of ["price","km"]){
+    const field=type==="price"?"(?:preco|valor)":"(?:km|quilometragem)";
+    if(new RegExp("(?:sem\\s+(?:limite\\s+(?:de\\s+)?)?|(?:limpar|remover|retirar|zerar)\\s+(?:o\\s+)?(?:limite\\s+de\\s+)?)"+field+"\\b").test(s)){
+      filters[type+"Min"]="";filters[type+"Max"]="";
+    }
+  }
+  return {filters,warnings,evidence};
+}
+
+// Alternativa determinística, gratuita e explícita quando /interpret não está publicado.
+// Não substitui IA e não inventa anúncios, localidades, versões ou preços.
+const norm = value => String(value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+const inText = (text, pattern) => pattern.test(text);
+
+export function parseLocalIntent(message, previousFilters = {}) {
+  const raw = String(message ?? "").slice(0, 450);
+  const s = norm(raw);
+  const quantities=parseIntentQuantities(s),typedAt=index=>quantities.evidence.some(e=>index>=e.start&&index<e.end);
+  const previous = previousFilters && typeof previousFilters === "object" ? previousFilters : {};
+  const filters = {}, warnings = [];
+  const brands = ["honda", "yamaha", "suzuki", "kawasaki", "bmw", "bajaj", "shineray", "dafra", "triumph", "harley-davidson", "royal enfield"]
+    .filter(name => s.includes(name));
+  if (brands.length > 1) warnings.push("Há mais de uma marca no pedido. Informe uma única marca.");
+  else if (brands.length === 1) filters.brand = brands[0].split(" ").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+
+  const hasFactor = inText(s, /\b(?:factor|ybr)\b/);
+  const hasHondaCG = inText(s, /\b(?:cg|titan|fan|start|cargo)\b/);
+  const isTitan = inText(s, /\btitan\b/), isFan = inText(s, /\bfan\b/), isStart = inText(s, /\bstart\b/);
+  const hondaVersions = [isTitan && "Titan", isFan && "Fan", isStart && "Start"].filter(Boolean);
+  if (hondaVersions.length > 1) warnings.push("Você citou versões diferentes (" + hondaVersions.join(" e ") + "). Escolha apenas uma.");
+  if (hasFactor && hasHondaCG) warnings.push("Foram citados modelos de fabricantes diferentes. Especifique somente uma moto.");
+
+  const displacement = [...s.matchAll(/\b(110|115|125|135|150|160|190|200|250|300|350|400|600|650)\b/g)].find(m=>!typedAt(m.index));
+  if (hasFactor && !hasHondaCG) {
+    if (filters.brand && norm(filters.brand) !== "yamaha") warnings.push("Factor/YBR não corresponde à marca informada.");
+    else {
+      filters.brand = "Yamaha";
+      filters.model = displacement ? displacement[1] : "";
+      filters.version = inText(s, /\bfactor\b/) ? "Factor" : "YBR";
+    }
+  } else if (hasHondaCG && !hasFactor) {
+    if (filters.brand && norm(filters.brand) !== "honda") warnings.push("CG/Titan/Fan não corresponde à marca informada.");
+    else {
+      filters.brand = "Honda";
+      filters.model = displacement ? "CG " + displacement[1] : "";
+      if (hondaVersions.length === 1) filters.version = hondaVersions[0];
+    }
+  } else if (inText(s, /\bbiz\b/)) {
+    if (filters.brand && norm(filters.brand) !== "honda") warnings.push("Biz não corresponde à marca informada.");
+    else {filters.brand = "Honda"; filters.model = displacement ? "Biz " + displacement[1] : "Biz"; filters.version = "";}
+  } else if (inText(s, /\b(?:fazer|fz25)\b/)) {
+    if (filters.brand && norm(filters.brand) !== "yamaha") warnings.push("Fazer não corresponde à marca informada.");
+    else {filters.brand = "Yamaha"; filters.model = displacement ? "Fazer " + displacement[1] : "Fazer"; filters.version = "";}
+  }
+  const namedModels=[[/\bdr\s*160\b/,"Suzuki","DR160"],[/\bninja\s*400\b/,"Kawasaki","Ninja 400"],[/\b(?:mt\s*03)\b/,"Yamaha","MT-03"],[/\bcb\s*300\b/,"Honda","CB 300"]];
+  for(const [pattern,brand,model] of namedModels)if(pattern.test(s)){
+    if(filters.brand&&norm(filters.brand)!==norm(brand))warnings.push("O modelo citado não corresponde à marca informada.");
+    else Object.assign(filters,{brand,model,version:""});
+  }
+
+  const range = [...s.matchAll(/\b((?:19|20)\d{2})\s*(?:a|ate|e|-)\s*((?:19|20)\d{2})\b/g)].find(m=>!typedAt(m.index)&&!typedAt(m.index+m[0].length-m[2].length));
+  if (range) {
+    const start = Number(range[1]), end = Number(range[2]);
+    if (start <= end) {filters.yearFrom = String(start); filters.yearTo = String(end);}
+    else warnings.push("A faixa de anos está invertida.");
+  } else {
+    const years = [...s.matchAll(/\b((?:19|20)\d{2})\b/g)].filter(m=>!typedAt(m.index)).map(x => x[1]);
+    if (years.length === 1) {filters.yearFrom = years[0]; filters.yearTo = years[0];}
+    else if (years.length > 1) warnings.push("Há vários anos sem uma faixa clara. Especifique o intervalo.");
+  }
+  if(/\b(?:fabricacao|fabricada|fabricado)\b/.test(s))filters.yearType="make";
+  else if(filters.yearFrom||/\b(?:ano[- ]?modelo|modelo de)\b/.test(s))filters.yearType="model";
+  // Cidades reconhecidas por nome inequívoco; jamais usar localização aproximada do aparelho.
+  const places = [
+    ["sao jose do rio preto", "São José do Rio Preto", "SP"],
+    ["ribeirao preto", "Ribeirão Preto", "SP"],
+    ["sao paulo", "São Paulo", "SP"],
+    ["campinas", "Campinas", "SP"],
+    ["goiania", "Goiânia", "GO"],
+    ["belo horizonte", "Belo Horizonte", "MG"],
+    ["curitiba", "Curitiba", "PR"],
+    ["porto alegre", "Porto Alegre", "RS"],
+    ["brasilia", "Brasília", "DF"]
+  ];
+  const cities = places.filter(([name]) => s.includes(name));
+  if (cities.length === 1) {
+    filters.originCity = cities[0][1];
+    filters.uf = cities[0][2];
+  } else if (cities.length > 1) {
+    warnings.push("Foram identificadas várias cidades. Especifique a cidade de origem.");
+  }
+  // "Rio Preto" sozinho pode referir-se a municípios diferentes. Usar somente
+  // quando o pedido contém "SP" ou quando já está selecionada a cidade correspondente.
+  if (!filters.originCity && /\brio preto\b/.test(s) &&
+      (/\bsp\b/.test(s) || norm(previous.originCity) === "sao jose do rio preto")) {
+    filters.originCity = "São José do Rio Preto";
+    filters.uf = "SP";
+  }
+  let ufExplicit = s.match(/\b(?:uf|estado)\s*[:\-]?\s*(sp|mg|go|pr|rs|rj|sc|mt|ms|ba|df|es|pa|pb|pe|ce|rn|ro|rr|to|ma|pi|al|se|ac|am|ap)\b/);
+  if(!ufExplicit)for(const point of municipalitiesInText(raw)){
+    const name=norm(point.name),index=s.indexOf(name);if(index<0)continue;
+    const suffix=s.slice(index+name.length).match(/^[\s/,-]+(sp|mg|go|pr|rs|rj|sc|mt|ms|ba|df|es|pa|pb|pe|ce|rn|ro|rr|to|ma|pi|al|se|ac|am|ap)\b/);
+    if(suffix&&(suffix[1].toUpperCase()===point.uf||!["se","to","am"].includes(suffix[1])||raw.includes(suffix[1].toUpperCase()))){ufExplicit=suffix;break;}
+  }
+  if (ufExplicit) {
+    const uf = ufExplicit[1].toUpperCase();
+    if (filters.uf && filters.uf !== uf) warnings.push("A cidade informada não corresponde à UF solicitada.");
+    else filters.uf = uf;
+  }
+  if(!filters.originCity&&/\b(?:em|cidade|origem|municipio)\b/.test(s)&&!(/\brio preto\b/.test(s)&&!(/\bsp\b/.test(s)||norm(previous.originCity)==="sao jose do rio preto"))){
+    const places=municipalitiesInText(raw,filters.uf||"");
+    if(places.length===1){filters.originCity=places[0].name;filters.uf=places[0].uf;}
+    else if(places.length>1)warnings.push("Cidade ambígua; informe nome completo e UF.");
+  }
+  const seller = /\bparticular(?:es)?\b/.test(s) ? "particular" : /\b(?:loja|revenda|concessionaria)\b/.test(s) ? "loja" : "";
+  if (seller) filters.sellerType = seller;
+  Object.assign(filters,quantities.filters);warnings.push(...quantities.warnings);
+  for(const [a,b,label] of [["priceMin","priceMax","preço"],["kmMin","kmMax","quilometragem"]])
+    if(filters[a]!==undefined&&filters[a]!==""&&filters[b]!==undefined&&filters[b]!==""&&Number(filters[a])>Number(filters[b]))warnings.push("A faixa de "+label+" está invertida.");
+  const colorText=filters.originCity?s.replace(norm(filters.originCity),""):s;
+  if (/\b(?:preta|preto|vermelha|vermelho|azul|branca|branco)\b/.test(colorText) &&
+      !/\b(?:rio preto|ribeirao preto)\b/.test(s)) warnings.push("A cor da moto não é um filtro disponível nesta pesquisa.");
+  return {filters, warnings:[...new Set(warnings)], mode:"local", evidence:quantities.evidence, recognized:Object.keys(filters).length>0, notice:"Interpretação por regras locais, sem usar IA remota. Confira os filtros."};
+}
+
+export function mergeIntentFilters(previous, interpreted) {
+  const original = previous && typeof previous === "object" ? previous : {};
+  const incoming = interpreted && typeof interpreted === "object" ? interpreted : {};
+  const changedVehicle = (incoming.brand && norm(incoming.brand) !== norm(original.brand)) ||
+    (incoming.model && norm(incoming.model) !== norm(original.model));
+  // Não transportar filtros de outra moto (ex.: Yamaha Factor → Kawasaki Ninja).
+  // Preservar apenas localização e preferências geográficas, sem inventar dados.
+  const base=changedVehicle?{
+    ...original,model:incoming.model||"",version:"",yearFrom:"",yearTo:"",priceMin:"",priceMax:"",
+    kmMin:"",kmMax:"",sellerType:"all"
+  }:original;
+  return {...base,...incoming};
+}
+
+const evidenceNorm=value=>String(value??"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
+export function primaryPageText(content){
+  return String(content??"").slice(0,250000).replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,"")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi,"").replace(/<br\s*\/?>|<\/(?:p|div|h[1-6]|li|dt|dd|section)>/gi,"\n").replace(/<[^>]+>/g," ")
+    .replace(/&nbsp;|&#160;/g," ").replace(/&amp;/g,"&").replace(/&#x([0-9a-f]+);/gi,(_,n)=>parseInt(n,16)<=0x10ffff?String.fromCodePoint(parseInt(n,16)):"")
+    .replace(/&#(\d+);/g,(_,n)=>Number(n)<=0x10ffff?String.fromCodePoint(Number(n)):"")
+    .split(/(?:^|\n)\s*(?:#{1,6}\s*)?(?:an[uú]ncios relacionados|veja tamb[eé]m|motos similares|similares a este an[uú]ncio|recomendados para voc[eê])[^\n]*(?:\n|$)/i)[0].slice(0,24000);
+}
+export function detectPageState(content,status=200){
+  const primary=evidenceNorm(primaryPageText(content));
+  if(status===404||status===410)return {status:"unavailable",reason:"HTTP_"+status};
+  if([401,403,429].includes(status)||/verify you are human|checking your browser|captcha|verifique.{0,30}humano|acesso negado|access denied/.test(primary))return {status:"blocked",reason:"ACCESS_BLOCKED"};
+  if(/(?:a |esta )?pagina nao (?:foi )?encontrada|anuncio (?:foi )?(?:removido|excluido|encerrado)|(?:este|esse) (?:item|anuncio|produto) (?:ja foi vendido|nao esta mais disponivel)|\bstatus\s*:\s*vendido\b|\b404\s*[-:]?\s*(?:not found|pagina)/.test(primary))return {status:"unavailable",reason:"REMOVED_OR_NOT_FOUND"};
+  if(status<200||status>=300)return {status:"unverified",reason:"HTTP_"+status};
+  if(primary.trim().length<20)return {status:"unverified",reason:"EMPTY_PAGE"};
+  return {status:"available",reason:"PUBLIC_PAGE_OBSERVED"};
+}
+export function listingIdentity(value){
+  try{
+    const u=new URL(value);if(u.protocol!=="https:"||u.username||u.password)return "";
+    const domain=["olx.com.br","webmotors.com.br","mercadolivre.com.br","napista.com.br"].find(d=>u.hostname===d||u.hostname.endsWith("."+d));
+    const id=u.pathname.replace(/\/+$/,"").match(/(?:[-/])(MLB-?\d{7,}|\d{5,})$/i)?.[1];
+    return domain&&id?domain+"/"+id.replace(/^MLB-/i,"MLB"):"";
+  }catch{return "";}
+}
+export function parseStructuredListing(html,url,filters={}){return parseStructuredListingEvidence(html,url,filters).fields;}
+export function parseStructuredListingEvidence(html,url,filters={}){
+  const identity=listingIdentity(url),objects=[];
+  if(!identity||detectPageState(html).status!=="available")return mergeListingEvidence([]);
+  function walk(value,depth=0,inList=false){
+    if(!value||typeof value!=="object"||depth>9||objects.length>200)return;
+    if(Array.isArray(value)){for(const item of value.slice(0,100))walk(item,depth+1,inList);return;}
+    const types=[value["@type"]].flat();
+    const listed=inList||types.includes("ItemList")||Object.hasOwn(value,"itemListElement");
+    if(!listed&&types.some(x=>["Motorcycle","Vehicle","Product","Car"].includes(x))){
+      const link=value.url||value.mainEntityOfPage?.["@id"]||value.mainEntityOfPage||value["@id"];
+      let candidate="";try{candidate=listingIdentity(new URL(typeof link==="object"?link["@id"]:String(link),url).href);}catch{}
+      if(candidate===identity)objects.push(value);
+    }
+    for(const [key,item] of Object.entries(value))if(["@graph","mainEntity","itemListElement","item"].includes(key))walk(item,depth+1,listed);
+  }
+  for(const script of String(html).matchAll(/<script\b[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)){
+    try{walk(JSON.parse(script[1]));}catch{}
+  }
+  const candidates=objects.map(item=>{
+    const offers=[item.offers].flat().filter(Boolean),offer=offers.length===1?offers[0]:null;
+    const price=offer?.priceCurrency==="BRL"&&/^\d+(?:\.\d+)?$/.test(String(offer.price??""))?Number(offer.price):null;
+    const mileage=item.mileageFromOdometer,km=mileage&&/^(?:KMT|km)$/i.test(String(mileage.unitCode||mileage.unitText||""))&&Number.isFinite(Number(mileage.value))?Number(mileage.value):null;
+    const address=item.address||item.availableAtOrFrom?.address||offer?.availableAtOrFrom?.address;
+    const place=address?resolveMunicipality(address.addressLocality,address.addressRegion):null;
+    const area=place?assessMunicipalityRadius(filters,place.name,place.uf):null;
+    const year=x=>/^(?:19|20)\d{2}(?:-|$)/.test(String(x||""))?Number(String(x).slice(0,4)):null;
+    const name=x=>typeof x==="string"?x:typeof x?.name==="string"?x.name:null;
+    const seller=item.seller||offer?.seller;
+    return {brand:name(item.brand),model:name(item.model),version:name(item.vehicleConfiguration),price,km,yearMake:year(item.productionDate),yearModel:year(item.vehicleModelDate),
+      city:place?.name??null,uf:place?.uf??null,distanceKm:area?.distanceKm??null,distanceMethod:area?.method??null,
+      sellerType:seller?.["@type"]==="Person"?"particular":seller?.["@type"]==="Organization"?"loja":null};
+  });
+  return mergeListingEvidence(candidates.map(fields=>({fields,source:"json-ld"})));
+}
+export function mergeListingEvidence(records){
+  const fields={},sources={},conflicts=[];
+  const keys=["brand","model","version","vehicleText","price","km","yearMake","yearModel","yearAdvertised","city","uf","sellerType","distanceKm","distanceMethod"];
+  for(const key of keys){
+    const known=records.filter(x=>x?.fields?.[key]!==undefined&&x.fields[key]!==null&&x.fields[key]!=="");
+    // Cabeçalhos variam na formatação; preferir o observado diretamente na página.
+    // Contradições dos campos do veículo continuam sendo comparadas abaixo.
+    if(key==="vehicleText"){fields[key]=known[0]?.fields[key]??null;if(known.length)sources[key]=[known[0].source];continue;}
+    const entries=new Map(known.map(x=>[typeof x.fields[key]==="string"?evidenceNorm(x.fields[key]):String(x.fields[key]),x.fields[key]]));
+    fields[key]=entries.size===1?[...entries.values()][0]:null;
+    if(entries.size>1)conflicts.push(key);
+    if(entries.size===1)sources[key]=[...new Set(known.map(x=>x.source))];
+  }
+  return {fields,sources,conflicts};
+}
+
 
 const plain=value=>String(value??"").replace(/\[([^\]]+)\]\([^)]*\)/g,"$1")
   .replace(/^[ \t]*#{1,6}[ \t]+/gm,"").replace(/[*_]/g,"");
@@ -107,16 +406,20 @@ const unique=values=>{const v=[...new Set(values.filter(x=>x!==null))];return v.
 // equivalentes; 125 não pode casar com 1250 e dados ausentes nunca são presumidos.
 export function vehicleMatches(item,filters){
   const fields=item.fields||{},title=item.title||"";
+  const observed=fields.vehicleText||title;
   return {
-    brand:!filters.brand||matches(filters.brand,title)||matches(filters.brand,fields.brand),
-    model:!filters.model||matches(filters.model,title)||matches(filters.model,fields.model),
-    version:!filters.version||matches(filters.version,title)||matches(filters.version,fields.version)||matches(filters.version,fields.model)
+    brand:!filters.brand||matches(filters.brand,fields.brand||observed),
+    model:!filters.model||matches(filters.model,fields.model||observed),
+    version:!filters.version||(fields.version?matches(filters.version,fields.version):matches(filters.version,fields.model||observed))
   };
 }
 
 export function parseListingFacts(content,filters={}){
   // Evitar que recomendações de outras motos contaminem os campos da moto principal.
-  const source=plain(content).slice(0,16000).split(/(?:^|\n)\s*(?:an[uú]ncios relacionados|veja tamb[eé]m|motos similares|recomendados para voc[eê])\s*(?:\n|$)/i)[0];
+  const pageState=detectPageState(content);
+  const source=pageState.status==="available"?plain(primaryPageText(content)):"";
+  const heading=pageState.status==="available"?String(content).match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i)?.[1]:null;
+  const vehicleText=source?(heading?primaryPageText(heading):source.split(/\r?\n/).find(x=>x.trim())||"").replace(/^#+\s*/,"").trim().slice(0,200):null;
   const labelled=name=>{
     const values=[...source.matchAll(new RegExp("(?:^|\\n)[ \\t]*(?:"+name+")[ \\t]*(?:[:\\-][ \\t]*|[ \\t]+|\\r?\\n[ \\t]*)([^\\n\\r]{1,110})","gmi"))]
       .map(x=>x[1].trim());
@@ -126,22 +429,351 @@ export function parseListingFacts(content,filters={}){
     ...source.matchAll(/R\$\s*([\d.,]+)\s*(?:a vista|à vista)/gi),
     ...source.matchAll(/^[ \t]*R\$[ \t]*([\d.,]+)[ \t]*$/gm)];
   const kms=[...source.matchAll(/(?:quilometragem|km rodados|hod[oô]metro|\bkm[ \t]*:)\s*[:\n-]?\s*([\d.,]+)\s*(?:km)?\b/gi),
-    ...source.matchAll(/\b([\d.,]+)[ \t]*km(?:[ \t]+rodados)?\b/gi)];
+    ...source.matchAll(/\b([\d.,]+)[ \t]*(?:km[ \t]+)?rodad[oa]s\b/gi)];
   const pairs=[...source.matchAll(/\b((?:19|20)\d{2})\s*\/\s*((?:19|20)\d{2})\b/g)].map(x=>x[1]+"/"+x[2]);
   const pair=unique(pairs)?.split("/").map(Number);
   const year=value=>/^(?:19|20)\d{2}$/.test(value||"")?Number(value):null;
   const place=municipalityFromLocationText(source);
   const geo=place?assessMunicipalityRadius(filters,place.name,place.uf):null;
   return {
-    brand:labelled("marca"),model:labelled("modelo"),version:labelled("vers[aã]o"),
+    brand:labelled("marca"),model:labelled("modelo"),version:labelled("vers[aã]o"),vehicleText,
     price:unique(prices.map(x=>amount(x[1]))),km:unique(kms.map(x=>amount(x[1]))),
     yearMake:pair?.[0]??year(labelled("ano(?: de)? fabrica[cç][aã]o")),
     yearModel:pair?.[1]??year(labelled("ano[ -]modelo")),
     // "Ano 2018" não prova separadamente fabricação e modelo.
     yearAdvertised:year(labelled("ano")),
     city:place?.name??null,uf:place?.uf??null,
+    sellerType:/\b(?:tipo de vendedor|vendedor)\s*[:\n]\s*particular\b/i.test(source)?"particular":/\b(?:tipo de vendedor|vendedor)\s*[:\n]\s*(?:loja|revenda|concessionaria)\b/i.test(source)?"loja":null,
     distanceKm:geo?.distanceKm??null,distanceMethod:geo?.method??null
   };
+}
+
+// Pesquisa externa: resultados INDEXADOS nunca equivalem a anúncio individual verificado.
+const SOURCES = [
+  {name:"OLX",domains:["olx.com.br"]},
+  {name:"Webmotors",domains:["webmotors.com.br"]},
+  {name:"Mercado Livre",domains:["mercadolivre.com.br"]},
+  {name:"NaPista",domains:["napista.com.br"]},
+  {name:"Facebook Marketplace",domains:["facebook.com"]}
+];
+const simple=x=>String(x??"").trim().slice(0,140);
+export function searchQuery(filters){
+  const f=filters||{};
+  const bits=[f.brand,f.model,f.version].map(simple).filter(Boolean);
+  const y1=Number(f.yearFrom),y2=Number(f.yearTo);
+  if(f.yearFrom&&Number.isInteger(y1)&&y1>1949&&y1<2101)bits.push(String(y1));
+  if(f.yearTo&&Number.isInteger(y2)&&y2>1949&&y2<2101&&y2!==y1)bits.push(String(y2));
+  if(f.originCity)bits.push(simple(f.originCity));
+  if(f.uf)bits.push(simple(f.uf));
+  bits.push("moto usada venda");
+  return bits.join(" ").slice(0,360);
+}
+export function marketplaceName(raw){
+  let host;
+  try{host=new URL(raw).hostname.toLowerCase();}catch{return "";}
+  for(const source of SOURCES)if(source.domains.some(x=>host===x||host.endsWith("."+x)))return source.name;
+  return "";
+}
+// A busca indexa páginas. Este classificador distingue um endereço que parece
+// anúncio individual de uma página de catálogo; não verifica disponibilidade.
+export function classifySearchPage(url){
+  let u;
+  try{u=new URL(url);}catch{return "unknown";}
+  const source=marketplaceName(u.href);
+  const path=u.pathname.replace(/\/+$/,"");
+  if(source==="Facebook Marketplace")return /^\/marketplace\/item\/\d{5,30}$/.test(path)?"individual-candidate":/^\/marketplace(?:\/|$)/.test(path)?"catalog":"unknown";
+  if(source==="OLX"){
+    return /[-\/]\d{9,}$/.test(path)&&path.includes("/autos-e-pecas/motos/")?"individual-candidate":"catalog";
+  }
+  if(source==="Webmotors"){
+    return /^\/comprar\/.+\/\d{5,}$/i.test(path)?"individual-candidate":"catalog";
+  }
+  if(source==="Mercado Livre"){
+    return /(?:^|[\/-])MLB-?\d{7,}(?:$|[\/?#])/i.test(path)?"individual-candidate":"catalog";
+  }
+  // Sem evidências de formato individual estável para esta origem.
+  return source?"catalog":"unknown";
+}
+
+// Também filtra o histórico antigo, que pode conter catálogos de imóveis/celulares.
+export function relevantSearchPage(item){
+  if(!item||typeof item!=="object")return false;
+  let u;try{u=new URL(String(item.url??""));}catch{return false;}
+  if(!marketplaceName(u.href)||u.protocol!=="https:")return false;
+  if(marketplaceName(u.href)==="Facebook Marketplace"&&classifySearchPage(u.href)==="unknown")return false;
+  let path;try{path=decodeURIComponent(u.pathname).normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();}catch{return false;}
+  if(/(?:^|\/)(?:imoveis|apartamentos?|casas?|celulares?|smartphones?|eletronicos|informatica|moda|roupas?|moveis|eletrodomesticos|terrenos?|carros|automoveis)(?:\/|$)/.test(path))return false;
+  if(classifySearchPage(u.href)==="individual-candidate")return true;
+  const title=String(item.title??"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
+  return /(?:^|\W)(?:moto|motos|motocicleta|motocicletas|honda|yamaha|suzuki|kawasaki|bajaj|dafra|shineray|triumph|bmw|factor|ninja|titan|fan|biz|fazer|ybr|cg)(?:$|\W)/.test(title) ||
+    /(?:^|\/)(?:motos?|motocicletas?)(?:\/|$)/.test(path);
+}
+export function normalizeWebLeads(raw){
+  if(!Array.isArray(raw))return [];
+  const seen=new Set();let catalogs=0;
+  return raw.flatMap(x=>{
+    if(!x||typeof x!=="object")return [];
+    const title=simple(x.title),url=String(x.url??"").trim(),source=marketplaceName(url);
+    if(!source||!title||!/^https:\/\//i.test(url)||!relevantSearchPage({url,title}))return [];
+    const canonical=new URL(url); canonical.hash="";
+    if(canonical.username||canonical.password)return [];
+    for(const key of [...canonical.searchParams.keys()])if(/^(utm_|fbclid$|gclid$)/i.test(key))canonical.searchParams.delete(key);
+    const norm=canonical.toString();
+    if(seen.has(norm))return []; seen.add(norm);
+    const pageType=classifySearchPage(norm);
+    if(pageType==="catalog"&&++catalogs>5)return [];
+    const raw=x.fields&&typeof x.fields==="object"?x.fields:{};
+    const numeric=k=>{
+      const v=raw[k];
+      return typeof v==="number"&&Number.isFinite(v)&&v>=0?v:null;
+    };
+    const fields={
+      price:numeric("price"),km:numeric("km"),yearMake:numeric("yearMake"),yearModel:numeric("yearModel"),yearAdvertised:numeric("yearAdvertised"),
+      brand:typeof raw.brand==="string"?raw.brand.slice(0,100):null,
+      model:typeof raw.model==="string"?raw.model.slice(0,110):null,
+      version:typeof raw.version==="string"?raw.version.slice(0,100):null,
+      vehicleText:typeof raw.vehicleText==="string"?raw.vehicleText.slice(0,200):null,
+      city:typeof raw.city==="string"?raw.city.slice(0,110):null,
+      uf:typeof raw.uf==="string"?raw.uf.slice(0,2):null,
+      sellerType:["particular","loja"].includes(raw.sellerType)?raw.sellerType:null
+    };
+    const status=["extracted","failed","not-attempted"].includes(x.extractionStatus)?x.extractionStatus:"not-attempted";
+    const validBuckets=["prequalified","pending","outside","catalog","unavailable"];
+    let assessment=x.assessment&&validBuckets.includes(x.assessment.bucket)?
+      {bucket:x.assessment.bucket,reasons:Array.isArray(x.assessment.reasons)?x.assessment.reasons.filter(y=>typeof y==="string").slice(0,9).map(y=>y.slice(0,160)):[]}:
+      {bucket:pageType==="catalog"?"catalog":"pending",reasons:["Informações não conferidas"]};
+    if(assessment.bucket==="prequalified"&&x.availability?.status!=="available")assessment={bucket:"pending",reasons:[...assessment.reasons,"Link sem conferência pública atual"]};
+    return [{
+      title,url:norm,source,pageType,snippet:String(x.content??"").slice(0,750),
+      observedAt:String(x.observedAt??"").slice(0,30),evidence:"index",
+      extractionStatus:status,fields,assessment
+      ,availability:{status:["available","unavailable","blocked","unverified"].includes(x.availability?.status)?x.availability.status:x.pageStatus==="unavailable"?"unavailable":"unverified",
+        reason:String(x.availability?.reason||"LINK_NOT_VALIDATED").replace(/[^A-Z0-9_]/g,"").slice(0,60),
+        checkedAt:Number.isFinite(Date.parse(x.availability?.checkedAt||""))?new Date(x.availability.checkedAt).toISOString():null,
+        httpStatus:Number.isInteger(x.availability?.httpStatus)?x.availability.httpStatus:null},
+      fieldEvidence:{conflicts:Array.isArray(x.fieldEvidence?.conflicts)?x.fieldEvidence.conflicts.filter(k=>Object.hasOwn(fields,k)):[],sourceUrl:norm,
+        sources:Object.fromEntries(Object.keys(fields).map(k=>[k,Array.isArray(x.fieldEvidence?.sources?.[k])?x.fieldEvidence.sources[k].filter(s=>["public-html","json-ld","tavily-extract"].includes(s)):[]])),
+        checkedAt:Number.isFinite(Date.parse(x.fieldEvidence?.checkedAt||""))?new Date(x.fieldEvidence.checkedAt).toISOString():null},
+      extractionError:typeof x.extractionError==="string"?x.extractionError.replace(/[^A-Z0-9_]/g,"").slice(0,70):null
+    }];
+  });
+}
+
+// Revisão defensiva na interface: protege também contra respostas de Workers antigos
+// e pesquisas armazenadas. Nunca promove catálogo ou município desconhecido a oferta.
+export function classifyDiscoveryForFilters(item,filters={}){
+  if(!item||item.pageType!=="individual-candidate")return {category:"catalog",distanceKm:null};
+  if(item.availability?.status==="unavailable"||item.assessment?.bucket==="unavailable")return {category:"unavailable",distanceKm:null};
+  const f=item.fields||{};
+  const area=assessMunicipalityRadius(filters,f.city,f.uf);
+  const year=Number(filters.yearType==="make"?f.yearMake:f.yearModel);
+  if((f.yearModel!==null&&f.yearModel!==undefined&&filters.yearType!=="make")||(f.yearMake!==null&&f.yearMake!==undefined&&filters.yearType==="make")){
+    if((filters.yearFrom&&year<Number(filters.yearFrom))||(filters.yearTo&&year>Number(filters.yearTo)))
+      return {category:"outside-filters",distanceKm:area.distanceKm};
+  }
+  for(const [field,lower,upper] of [["price",filters.priceMin,filters.priceMax],["km",filters.kmMin,filters.kmMax]]){
+    const v=f[field];
+    if(v===null||v===undefined)continue;
+    if((lower&&v<Number(lower))||(upper&&v>Number(upper)))
+      return {category:"outside-filters",distanceKm:area.distanceKm};
+  }
+  if(area.status==="outside")return {category:"out-of-area",distanceKm:area.distanceKm};
+  if(area.status!=="inside")return {category:"location-unverified",distanceKm:null};
+  const vehicle=vehicleMatches(item,filters);
+  if(!vehicle.brand||!vehicle.model||!vehicle.version)
+    return {category:"model-unverified",distanceKm:area.distanceKm};
+  return {category:"in-area",distanceKm:area.distanceKm};
+}
+
+// Dados incompletos continuam investigáveis, sem serem anunciados como dentro do raio.
+export function partitionDiscovery(items,filters){
+  const matched=[],unresolved=[],excluded=[],unavailable=[];
+  for(const item of items){
+    const entry={item,region:classifyDiscoveryForFilters(item,filters)};
+    if(entry.region.category==="unavailable")unavailable.push(entry);
+    else if(item.assessment?.bucket==="outside"||["catalog","out-of-area","outside-filters"].includes(entry.region.category))excluded.push(entry);
+    else if(entry.region.category==="in-area")matched.push(entry);
+    else unresolved.push(entry);
+  }
+  return {matched,unresolved,excluded,unavailable};
+}
+
+export async function withDeadline(operation,timeoutMs,code="REQUEST_TIMEOUT"){
+  let timer;
+  try{return await Promise.race([operation(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Object.assign(Error(code),{code})),timeoutMs);})]);}
+  finally{clearTimeout(timer);}
+}
+export function consumeRequestBudget(memory,key,{now=Date.now(),limit=6,windowMs=300000}={}){
+  for(const [id,entry] of memory)if(now-entry.since>=windowMs)memory.delete(id);
+  const entry=memory.get(key)||{since:now,count:0};
+  if(entry.count>=limit)return false;
+  entry.count++;memory.set(key,entry);return true;
+}
+
+
+export const SEARCH_BUDGET=Object.freeze({searches:4,extractionUrls:5,publicPages:5,deadlineMs:45000});
+const PIPELINE_DOMAINS=["olx.com.br","webmotors.com.br","mercadolivre.com.br","napista.com.br"];
+const pipelineText=x=>String(x??"").trim().slice(0,100).replace(/["()]/g,"");
+function allowedListing(value){
+  try{const u=new URL(value);return u.protocol==="https:"&&!u.username&&!u.password&&PIPELINE_DOMAINS.some(d=>u.hostname===d||u.hostname.endsWith("."+d))&&classifySearchPage(u.href)==="individual-candidate";}catch{return false;}
+}
+function canonicalCandidate(value){
+  try{const u=new URL(value);if(u.protocol!=="https:"||u.username||u.password||!PIPELINE_DOMAINS.some(d=>u.hostname===d||u.hostname.endsWith("."+d)))return "";
+    u.hash="";for(const key of [...u.searchParams.keys()])if(/^(utm_|fbclid$|gclid$|ref$)/i.test(key))u.searchParams.delete(key);
+    return u.href;
+  }catch{return "";}
+}
+export function planQueries(f){
+  const core=[f.brand,f.model,f.version].map(pipelineText).filter(Boolean).join(" ");
+  const years=[f.yearFrom,f.yearTo].filter(v=>/^(?:19|20)\d{2}$/.test(String(v))),middle=years.length===2?String(Math.floor((Number(years[0])+Number(years[1]))/2)):years[0]||"";
+  const city='"'+pipelineText(f.originCity)+'"',near=nearbyMunicipalities(f,2).map(p=>'"'+p.name+'"');
+  return [[core,years[0]||"","site:olx.com.br",city,f.uf,"moto venda"],
+    [core,years[1]||years[0]||"","site:webmotors.com.br/comprar",city,f.uf],
+    [core,middle,near.length?"("+[city,...near].join(" OR ")+")":city,f.uf,"moto usada anuncio individual"]]
+    .map(parts=>parts.filter(Boolean).join(" ").slice(0,360));
+}
+function pipelineFailure(code,status=0){const error=Error(code);error.code=code;error.status=status;return error;}
+export async function readLimitedBody(response,maxBytes=250000){
+  if(!response.body?.getReader){const value=await response.text();return {text:value.slice(0,maxBytes),truncated:value.length>maxBytes};}
+  const reader=response.body.getReader(),decoder=new TextDecoder();let bytes=0,text="",truncated=false;
+  try{while(true){const step=await reader.read();if(step.done)break;const remaining=maxBytes-bytes;
+    if(step.value.length>remaining){text+=decoder.decode(step.value.slice(0,remaining),{stream:true});truncated=true;break;}
+    bytes+=step.value.length;text+=decoder.decode(step.value,{stream:true});}
+    text+=decoder.decode();
+  }finally{try{await reader.cancel();}catch{}}
+  return {text,truncated};
+}
+export async function inspectPublicPage(url,{fetchImpl=fetch,timeoutMs=5500}={}){
+  const checkedAt=new Date().toISOString();
+  if(!allowedListing(url))return {availability:{status:"unverified",reason:"URL_NOT_ALLOWED",checkedAt},html:""};
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeoutMs);
+  try{
+    // Somente páginas públicas, sem cookies, credenciais, login ou camuflagem de cliente.
+    const response=await fetchImpl(url,{method:"GET",redirect:"manual",credentials:"omit",headers:{Accept:"text/html,application/xhtml+xml"},signal:controller.signal});
+    if(response.status>=300&&response.status<400)return {availability:{status:"unverified",reason:"REDIRECT_REQUIRES_REVIEW",httpStatus:response.status,checkedAt},html:""};
+    if([404,410,401,403,429].includes(response.status))return {availability:{...detectPageState("",response.status),httpStatus:response.status,checkedAt},html:""};
+    if(!/text\/(?:html|plain)|application\/xhtml\+xml/i.test(response.headers.get("Content-Type")||""))return {availability:{status:"unverified",reason:"UNEXPECTED_CONTENT_TYPE",httpStatus:response.status,checkedAt},html:""};
+    if(response.url&&listingIdentity(response.url)!==listingIdentity(url))return {availability:{status:"unverified",reason:"LISTING_ID_MISMATCH",checkedAt},html:""};
+    const {text:html,truncated}=await readLimitedBody(response);
+    const state=detectPageState(html,response.status);
+    return {availability:{...state,httpStatus:response.status,checkedAt,truncated},html:state.status==="available"?html:""};
+  }catch(error){return {availability:{status:"unverified",reason:error?.name==="AbortError"?"PAGE_TIMEOUT":"PAGE_NETWORK_ERROR",checkedAt},html:""};}
+  finally{clearTimeout(timer);}
+}
+function candidatePages(raw){
+  const seen=new Set();
+  return raw.flatMap(value=>{
+    const url=canonicalCandidate(value?.url);if(!url)return [];
+    let relevant=false;try{relevant=relevantSearchPage({url,title:value.title});}catch{}
+    const identity=classifySearchPage(url)==="individual-candidate"?listingIdentity(url)||url:url;
+    if(!relevant||seen.has(identity))return [];seen.add(identity);
+    return [{url,title:String(value.title||"").slice(0,160),content:String(value.content||"").slice(0,800),
+      source:marketplaceName(url),evidence:"index",pageType:classifySearchPage(url)}];
+  }).slice(0,60);
+}
+export async function collectCandidates(filters,env,{fetchImpl=fetch,grade}={}){
+  const started=Date.now(),deadline=started+SEARCH_BUDGET.deadlineMs,queries=[],errors=[],raw=[];
+  const usage={searches:0,extractionUrls:0,publicPages:0,tavilyExtractRequests:0},processed=new Map();
+  let succeeded=0,supplierBlocked=false;
+  const remaining=()=>Math.max(0,deadline-Date.now());
+  async function tavily(endpoint,body){
+    if(remaining()<100||supplierBlocked)throw pipelineFailure(supplierBlocked?"SUPPLIER_LIMIT":"SEARCH_DEADLINE");
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),Math.min(12000,remaining()));
+    try{
+      const response=await fetchImpl("https://api.tavily.com/"+endpoint,{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+env.TAVILY_API_KEY},body:JSON.stringify({...body,include_usage:true}),signal:controller.signal});
+      if(!response.ok){
+        if([401,403,429,432,433].includes(response.status))supplierBlocked=true;
+        throw pipelineFailure(response.status===429?"TAVILY_RATE_LIMIT":[401,403].includes(response.status)?"TAVILY_AUTH_FAILED":"TAVILY_HTTP_"+response.status,response.status);
+      }
+      const bodyRead=await readLimitedBody(response,1000000);
+      if(bodyRead.truncated)throw pipelineFailure("TAVILY_RESPONSE_TOO_LARGE");
+      let data;try{data=JSON.parse(bodyRead.text);}catch{throw pipelineFailure("TAVILY_INVALID_RESPONSE");}
+      if(!data||typeof data!=="object"||!Array.isArray(data.results))throw pipelineFailure("TAVILY_INVALID_RESPONSE");
+      return data;
+    }catch(error){if(error?.code)throw error;throw pipelineFailure(error?.name==="AbortError"?"TAVILY_TIMEOUT":"TAVILY_NETWORK_ERROR");}
+    finally{clearTimeout(timer);}
+  }
+  async function search(query){
+    if(usage.searches>=SEARCH_BUDGET.searches||remaining()<100)return;
+    const index=usage.searches++;queries.push(query);
+    try{const data=await tavily("search",{query,search_depth:"basic",max_results:15,include_domains:PIPELINE_DOMAINS,include_answer:false,include_raw_content:false});succeeded++;raw.push(...data.results);}
+    catch(error){errors.push({stage:"search",queryIndex:index,code:error.code||"TAVILY_SEARCH_FAILED",httpStatus:error.status||null});}
+  }
+  async function examine(candidates){
+    const selected=candidates.filter(x=>!processed.has(listingIdentity(x.url)||x.url)).slice(0,SEARCH_BUDGET.publicPages-usage.publicPages);
+    const pending=[];
+    // Lote de no máximo três páginas; todas as tentativas contam, inclusive falhas.
+    for(let offset=0;offset<selected.length;offset+=3){
+      await Promise.all(selected.slice(offset,offset+3).map(async page=>{
+        if(remaining()<100)return;
+        usage.publicPages++;
+        const checked=await inspectPublicPage(page.url,{fetchImpl,timeoutMs:Math.min(5500,remaining())});
+        const records=[];let structuredConflicts=[];
+        if(checked.html){
+          records.push({fields:parseListingFacts(checked.html,filters),source:"public-html"});
+          const structured=parseStructuredListingEvidence(checked.html,page.url,filters);structuredConflicts=structured.conflicts;
+          records.push({fields:structured.fields,source:"json-ld"});
+        }
+        const evidence=mergeListingEvidence(records);
+        evidence.conflicts=[...new Set([...evidence.conflicts,...structuredConflicts])];
+        for(const key of evidence.conflicts){evidence.fields[key]=null;delete evidence.sources[key];}
+        const item={...page,...evidence,availability:checked.availability,pageStatus:checked.availability.status,
+          extractionStatus:records.length&&Object.values(evidence.fields).some(x=>x!==null)?"extracted":"failed",extractionSource:records.length?"public-html":null,
+          fieldEvidence:{sources:evidence.sources,conflicts:evidence.conflicts,checkedAt:checked.availability.checkedAt,sourceUrl:page.url}};
+        processed.set(listingIdentity(page.url)||page.url,item);
+        const needed=["price","km",filters.yearType==="make"?"yearMake":"yearModel","city","uf"];
+        if(!["unavailable","blocked"].includes(item.availability.status)&&needed.some(k=>item.fields[k]===null))pending.push(item);
+      }));
+    }
+    const extract=pending.slice(0,SEARCH_BUDGET.extractionUrls-usage.extractionUrls);
+    if(extract.length&&!supplierBlocked&&remaining()>100){
+      usage.extractionUrls+=extract.length;usage.tavilyExtractRequests++;
+      try{
+        const data=await tavily("extract",{urls:extract.map(x=>x.url),extract_depth:"basic",format:"markdown",include_images:false,timeout:Math.min(10,remaining()/1000)});
+        const resultById=new Map(data.results.map(x=>[listingIdentity(x.url),x]));
+        const failedById=new Map((Array.isArray(data.failed_results)?data.failed_results:[]).map(x=>[listingIdentity(x.url),x]));
+        for(const item of extract){
+          const id=listingIdentity(item.url),result=resultById.get(id),body=String(result?.raw_content||""),state=detectPageState(body);
+          if(body&&state.status==="available"){
+            const merged=mergeListingEvidence([{fields:item.fields,source:item.extractionSource||"public-html"},{fields:parseListingFacts(body,filters),source:"tavily-extract"}]);
+            item.fields=merged.fields;item.extractionStatus="extracted";item.extractionSource="tavily-extract";
+            item.fieldEvidence={sources:merged.sources,conflicts:[...new Set([...item.fieldEvidence.conflicts,...merged.conflicts])],checkedAt:new Date().toISOString(),sourceUrl:item.url};
+          }else if(body&&state.status==="unavailable"){
+            item.availability={...state,checkedAt:new Date().toISOString(),method:"extracted-page-content"};item.pageStatus="unavailable";
+            item.fields=mergeListingEvidence([]).fields;item.extractionStatus="failed";
+          }else{
+            const code=failedById.has(id)?"TAVILY_EXTRACT_URL_FAILED":"TAVILY_EXTRACT_EMPTY";
+            item.extractionError=code;errors.push({stage:"extract",url:item.url,code});
+          }
+        }
+      }catch(error){for(const item of extract){item.extractionError=error.code||"TAVILY_EXTRACT_FAILED";errors.push({stage:"extract",url:item.url,code:item.extractionError,httpStatus:error.status||null});}}
+    }
+    for(const item of processed.values())item.assessment=grade(item,filters);
+  }
+  await Promise.all(planQueries(filters).map(search));
+  if(!succeeded){const error=pipelineFailure(errors[0]?.code||"NO_SEARCH_COMPLETED",errors[0]?.httpStatus||0);error.coverage={...usage,errors};throw error;}
+  let pages=candidatePages(raw);
+  await examine(pages.filter(x=>x.pageType==="individual-candidate").slice(0,3));
+  const hasQualified=()=>[...processed.values()].some(x=>x.assessment.bucket==="prequalified");
+  if(!hasQualified()&&!supplierBlocked&&remaining()>100){
+    const f=filters,near=nearbyMunicipalities(f,2);
+    const query=[f.brand,f.model,f.version,f.yearFrom||"","site:olx.com.br",'"autos-e-pecas/motos"','"'+(near[0]?.name||f.originCity)+'"',"R$ km anuncio"].map(pipelineText).filter(Boolean).join(" ").slice(0,360);
+    await search(query);pages=candidatePages(raw);
+  }
+  await examine(pages.filter(x=>x.pageType==="individual-candidate"));
+  const individual=pages.filter(x=>x.pageType==="individual-candidate").map(page=>{
+    const observed=processed.get(listingIdentity(page.url)||page.url);if(observed)return observed;
+    const item={...page,fields:mergeListingEvidence([]).fields,extractionStatus:"not-attempted",availability:{status:"unverified",reason:"REQUEST_BUDGET",checkedAt:new Date().toISOString()}};item.assessment=grade(item,filters);return item;
+  });
+  const priority={prequalified:0,pending:1,outside:2,unavailable:3};individual.sort((a,b)=>(priority[a.assessment.bucket]??9)-(priority[b.assessment.bucket]??9));
+  const catalogs=pages.filter(x=>x.pageType==="catalog").slice(0,5).map(x=>({...x,assessment:{bucket:"catalog",reasons:["Página de resultados; não é uma moto individual"]}}));
+  return {source:"Tavily",query:queries[0],queries,checkedAt:new Date().toISOString(),evidence:"index",items:[...individual,...catalogs].slice(0,20),
+    coverage:{queriesAttempted:usage.searches,queriesSucceeded:succeeded,indexedLinks:pages.length,individualLinks:individual.length,catalogPages:catalogs.length,
+      extractionAttempted:processed.size,extractionSucceeded:[...processed.values()].filter(x=>x.extractionStatus==="extracted").length,
+      extractionFailures:[...processed.values()].filter(x=>x.extractionStatus==="failed").length,publicPagesAttempted:usage.publicPages,tavilyExtractionUrls:usage.extractionUrls,tavilyExtractRequests:usage.tavilyExtractRequests,
+      prequalified:individual.filter(x=>x.assessment.bucket==="prequalified").length,unavailable:individual.filter(x=>x.availability?.status==="unavailable").length,
+      limits:SEARCH_BUDGET,errors,elapsedMs:Date.now()-started,regionRadiusVerified:false,regionRadiusMethod:"approximate-municipal-centers"},
+    notice:"Páginas públicas observadas não comprovam disponibilidade de venda, documentação ou distância por estrada."};
 }
 
 /* Evolution Radar IA — Cloudflare Worker
@@ -168,24 +800,31 @@ function queryFor(f){
 }
 function validFilters(f){
   if(!f||typeof f!=="object"||Array.isArray(f))return false;
+  if(["brand","model","originCity","uf"].some(k=>typeof f[k]!=="string"||f[k].length>100))return false;
   if(!text(f.brand)||!text(f.model)||!text(f.originCity)||!text(f.uf))return false;
   if(!/^[a-z]{2}$/i.test(text(f.uf)))return false;
+  if(!resolveMunicipality(f.originCity,f.uf))return false;
   if(f.yearFrom&&!isYear(f.yearFrom))return false;
   if(f.yearTo&&!isYear(f.yearTo))return false;
   if(f.yearFrom&&f.yearTo&&Number(f.yearFrom)>Number(f.yearTo))return false;
-  for(const name of ["priceMin","priceMax","kmMax","radiusKm"]){
+  for(const name of ["priceMin","priceMax","kmMin","kmMax","radiusKm"]){
     if(f[name]!==""&&f[name]!==undefined&&f[name]!==null&&(!Number.isFinite(Number(f[name]))||Number(f[name])<0))return false;
   }
   if(f.priceMin&&f.priceMax&&Number(f.priceMin)>Number(f.priceMax))return false;
+  if(f.kmMin&&f.kmMax&&Number(f.kmMin)>Number(f.kmMax))return false;
   return true;
 }
 async function authenticate(token,env){
-  const result=await fetch("https://identitytoolkit.googleapis.com/v1/accounts:lookup?key="+encodeURIComponent(env.FIREBASE_WEB_API_KEY),{
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),6500);
+  let result,data;
+  try{
+  result=await fetch("https://identitytoolkit.googleapis.com/v1/accounts:lookup?key="+encodeURIComponent(env.FIREBASE_WEB_API_KEY),{
     method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({idToken:token})
+    body:JSON.stringify({idToken:token}),signal:controller.signal
   });
   if(!result.ok)return null;
-  const data=await result.json();
+  data=await result.json();
+  }finally{clearTimeout(timer);}
   const u=data.users?.[0];
   // Mantém o administrador e permite usuários adicionais aprovados explicitamente.
   // ALLOWED_UIDS é opcional e deve ficar somente nos Secrets da Cloudflare.
@@ -204,11 +843,10 @@ async function authenticate(token,env){
     ".json?auth="+encodeURIComponent(token);
   try{
     const control=new AbortController(),timer=setTimeout(()=>control.abort(),6500);
-    let membership;
-    try{membership=await fetch(memberUrl,{signal:control.signal,cache:"no-store"});}
+    let membership,m;
+    try{membership=await fetch(memberUrl,{signal:control.signal,cache:"no-store"});if(membership.ok)m=await membership.json();}
     finally{clearTimeout(timer);}
     if(!membership.ok)return null;
-    const m=await membership.json();
     if(m?.status==="approved"&&m?.permissions?.search===true)return u.localId;
     if(m)return null;
     // Compatibilidade com autorizações manuais anteriores, somente se não
@@ -249,6 +887,7 @@ function sources(results){
 // Pesquisa em duas fases: descobrir URLs; extrair somente anúncios individuais.
 // Dados incompletos sempre permanecem pendentes. Nenhum resultado equivale a compra aprovada.
 const searchMemory=new Map();
+const inFlightSearches=new Map(),requestBudget=new Map();
 export function listingType(url){
   let u;try{u=new URL(url);}catch{return "unknown";}
   const path=u.pathname.replace(/\/+$/,"");
@@ -272,17 +911,24 @@ export function parseFacts(page,title,f){
   return parseListingFacts(page,f);
 }
 export function gradeListing(item,f){
-  const found=item.fields||{},title=normalized(item.title),reject=[],pending=[];
+  const found=item.fields||{},title=normalized(found.vehicleText||item.title),reject=[],pending=[];
+  if(item.availability?.status==="unavailable")return {bucket:"unavailable",reasons:["Página removida, encerrada ou não encontrada: "+item.availability.reason]};
+  if(item.availability?.status!=="available")pending.push("Link individual não validado nesta consulta");
+  if(item.fieldEvidence?.conflicts?.length)pending.push("Dados contraditórios: "+item.fieldEvidence.conflicts.join(", "));
+  if(f.requireRiskEvidence===true||f.requireRiskEvidence==="on"||f.requireRiskEvidence==="true")pending.push("Investigação veicular não consultada por esta busca pública");
+  for(const [key,label] of [["price","Preço total"],["km","Quilometragem"],[f.yearType==="make"?"yearMake":"yearModel","Ano do tipo escolhido"]])if(found[key]===null||found[key]===undefined)pending.push(label+" não comprovado");
+  if(!found.brand&&!found.vehicleText)pending.push("Marca não observada na página individual");
+  if(!found.model&&!found.vehicleText)pending.push("Modelo não observado na página individual");
   const vehicle=vehicleMatches(item,f);
-  if(!vehicle.brand)pending.push("Marca não comprovada no anúncio");
+  if(!vehicle.brand){if(found.brand)reject.push("Marca comprovada diferente do filtro");else pending.push("Marca não comprovada no anúncio");}
   if(!vehicle.model){
     const expected=normalized(f.model).match(/^([a-z]+)\s*(\d{2,4})$/);
     const observed=expected&&title.match(new RegExp("\\b"+expected[1]+"\\s*(\\d{2,4})\\b"));
-    if(observed&&observed[1]!==expected[2])reject.push("Cilindrada/modelo incompatível");
+    if(found.model||(observed&&observed[1]!==expected[2]))reject.push("Cilindrada/modelo incompatível");
     else pending.push("Modelo exato não comprovado");
   }
   if(!vehicle.version){
-    if(/\b(fan|start|titan|cargo)\b/.test(title))reject.push("Versão aparentemente diferente");
+    if(found.version||/\b(fan|start|titan|cargo)\b/.test(normalized(found.model||title)))reject.push("Versão comprovada diferente do filtro");
     else pending.push("Versão não comprovada");
   }
   const y=f.yearType==="make"?found.yearMake:found.yearModel;
@@ -298,9 +944,13 @@ export function gradeListing(item,f){
     if(found.price===null||found.price===undefined)pending.push("Preço mínimo não comprovado");
     else if(found.price<Number(f.priceMin))reject.push("Preço abaixo do mínimo");
   }
-  if(f.kmMax){
+  if(f.kmMax||f.kmMin){
     if(found.km===null||found.km===undefined)pending.push("Quilometragem não comprovada");
-    else if(found.km>Number(f.kmMax))reject.push("KM acima do limite");
+    else if((f.kmMax&&found.km>Number(f.kmMax))||(f.kmMin&&found.km<Number(f.kmMin)))reject.push("KM fora do limite");
+  }
+  if(f.sellerType&&f.sellerType!=="all"){
+    if(!found.sellerType)pending.push("Tipo de vendedor não comprovado");
+    else if(found.sellerType!==f.sellerType)reject.push("Tipo de vendedor diferente do filtro");
   }
   if(!found.city||!found.uf)pending.push("Cidade e UF não comprovadas no anúncio");
   else {
@@ -312,83 +962,8 @@ export function gradeListing(item,f){
   return {bucket:reject.length?"outside":pending.length?"pending":"prequalified",
     reasons:reject.length?reject:pending.length?pending:["Dados da página sugerem compatibilidade; confirmar vendedor, documentação e disponibilidade"]};
 }
-export function searchPlan(f){
-  const core=[text(f.brand),text(f.model),text(f.version)].filter(Boolean).join(" ");
-  const city='"'+text(f.originCity).replace(/"/g,"")+'"';
-  const years=[f.yearFrom,f.yearTo].filter(x=>isYear(x));
-  const query1=[core,years[0]||"","site:olx.com.br",city,text(f.uf),"moto venda"].join(" ");
-  const query2=[core,years[1]||years[0]||"","site:webmotors.com.br/comprar",city,text(f.uf)].join(" ");
-  const middle=years.length===2?String(Math.floor((Number(years[0])+Number(years[1]))/2)):(years[0]||"");
-  const query3=[core,middle,city,text(f.uf),"moto usada venda"].join(" ");
-  return [...new Set([query1,query2,query3].map(x=>x.slice(0,360)))];
-}
-async function tavilyCall(endpoint,body,env){
-  const ac=new AbortController(),timer=setTimeout(()=>ac.abort(),18000);
-  try{
-    const r=await fetch("https://api.tavily.com/"+endpoint,{
-      method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+env.TAVILY_API_KEY},
-      body:JSON.stringify(body),signal:ac.signal});
-    if(!r.ok)throw Error(r.status===429?"Cota de pesquisa atingida":"Erro externo HTTP "+r.status);
-    return await r.json();
-  }finally{clearTimeout(timer);}
-}
-async function collect(f,env){
-  const plan=searchPlan(f);
-  const batches=await Promise.allSettled(plan.map(query=>tavilyCall("search",{
-    query,search_depth:"basic",max_results:15,
-    include_domains:ALLOWED_DOMAINS,include_answer:false,include_raw_content:false
-  },env)));
-  const succeeded=batches.filter(x=>x.status==="fulfilled").map(x=>x.value);
-  if(!succeeded.length)throw Error(batches[0]?.reason?.message||"Nenhuma consulta concluída");
-  const raw=succeeded.flatMap(data=>Array.isArray(data.results)?data.results:[]);
-  let pages=sources(raw);
-  let recovered=false;
-  if(!pages.some(x=>listingType(x.url)==="individual-candidate")){
-    // Uma quarta busca focada só é consumida quando as buscas iniciais devolvem catálogos.
-    recovered=true;
-    const q=[text(f.brand),text(f.model),text(f.version),text(f.yearFrom||""),text(f.originCity),
-      "site:olx.com.br", "R$", "km", "venda"].filter(Boolean).join(" ").slice(0,360);
-    try{
-      const next=await tavilyCall("search",{query:q,search_depth:"basic",max_results:15,
-        include_domains:ALLOWED_DOMAINS,include_answer:false,include_raw_content:false},env);
-      pages=sources([...raw,...(Array.isArray(next.results)?next.results:[])]);
-    }catch{/* Mantém resultados anteriores e informa cobertura parcial. */}
-  }
-  const listed=pages.map(x=>({...x,pageType:listingType(x.url),source:marketplace(x.url),
-      evidence:"index",extractionStatus:"not-attempted"}));
-  const candidates=listed.filter(x=>x.pageType==="individual-candidate");
-  let extracted=[],failures=[];
-  const selected=candidates.slice(0,5);
-  if(selected.length){
-    try{
-      const r=await tavilyCall("extract",{urls:selected.map(x=>x.url),extract_depth:"basic",
-        include_images:false,format:"markdown"},env);
-      extracted=Array.isArray(r.results)?r.results:[];
-      failures=Array.isArray(r.failed_results)?r.failed_results:[];
-    }catch(e){failures=selected.map(x=>({url:x.url,error:String(e.message)}));}
-  }
-  const bodies=new Map(extracted.map(x=>[x.url,String(x.raw_content??"")]));
-  const individual=candidates.map(x=>{
-    const content=bodies.get(x.url),done=!!content;
-    const item={...x,extractionStatus:done?"extracted":selected.some(v=>v.url===x.url)?"failed":"not-attempted",
-      fields:done?parseFacts(content,x.title,f):{price:null,km:null,yearMake:null,yearModel:null,city:null,uf:null}};
-    item.assessment=gradeListing(item,f);
-    return item;
-  });
-  const priority={prequalified:0,pending:1,outside:2};
-  individual.sort((a,b)=>(priority[a.assessment.bucket]??8)-(priority[b.assessment.bucket]??8));
-  const catalogs=listed.filter(x=>x.pageType==="catalog").slice(0,5).map(x=>({...x,
-    assessment:{bucket:"catalog",reasons:["Página de resultados; nenhuma moto individual confirmada"]}}));
-  return {source:"Tavily",query:plan[0],queries:plan,checkedAt:new Date().toISOString(),evidence:"index",
-    items:[...individual,...catalogs].slice(0,20),coverage:{
-      queriesAttempted:plan.length+(recovered?1:0),queriesSucceeded:succeeded.length,indexedLinks:listed.length,
-      individualLinks:individual.length,catalogPages:catalogs.length,
-      extractionAttempted:selected.length,extractionSucceeded:extracted.length,extractionFailures:failures.length,
-      prequalified:individual.filter(x=>x.assessment.bucket==="prequalified").length,
-      regionRadiusVerified:false,regionRadiusMethod:"approximate-municipal-centers"
-    },notice:"Resultado indexado ou extraído de página. Não comprova disponibilidade, documentação ou distância de rota."};
-}
-
+export function searchPlan(f){return planQueries(f);}
+async function collect(f,env){return collectCandidates(f,env,{grade:gradeListing});}
 
 // Interpretação de pedido por IA: retorna apenas campos estruturados e jamais confirma anúncios.
 const intentCache=new Map();
@@ -405,7 +980,7 @@ export function safeIntent(raw){
   for(const key of ["yearFrom","yearTo"]){
     if(/^(19|20)\d{2}$/.test(String(raw[key]??"")))out[key]=String(raw[key]);
   }
-  for(const key of ["priceMin","priceMax","kmMax","radiusKm"]){
+  for(const key of ["priceMin","priceMax","kmMin","kmMax","radiusKm"]){
     const value=raw[key];
     if(value===null||value===undefined||value==="")continue;
     if((typeof value==="number"||typeof value==="string")&&/^\d+(?:\.\d+)?$/.test(String(value))&&Number.isFinite(Number(value))&&Number(value)>=0){
@@ -428,10 +1003,11 @@ async function interpretRequest(message,uid,env){
   const cacheKey=uid+":"+prompt.toLocaleLowerCase("pt-BR");
   const saved=intentCache.get(cacheKey);
   if(saved&&Date.now()-saved.time<600000)return response({...saved.data,cache:true});
+  if(!consumeRequestBudget(requestBudget,"intent:"+uid,{limit:6}))return response({error:"Limite temporário de interpretação atingido. Aguarde antes de repetir.",code:"INTENT_REQUEST_LIMIT"},429);
   try{
-    const model=await env.AI.run("@cf/zai-org/glm-4.7-flash",{
+    const model=await withDeadline(()=>env.AI.run("@cf/zai-org/glm-4.7-flash",{
       messages:[
-        {role:"system",content:"Você extrai exclusivamente filtros de pesquisa de motos usadas de um pedido em português brasileiro. Responda APENAS com um objeto JSON válido sem markdown, sem texto adicional, com as chaves opcionais: brand, model, version, yearType (model ou make), yearFrom, yearTo, priceMin, priceMax, kmMax, originCity, uf, radiusKm, sellerType (all, particular, loja). Nunca invente filtros ausentes. Se o pedido citar um único ano, use yearFrom e yearTo iguais. Dinheiro em reais como número simples (ex: oito mil = 8000). Cidade e UF apenas se explicitamente fornecidas ou inequivocamente identificáveis pelo nome geográfico. Se estiver ambíguo, omita o campo."},
+        {role:"system",content:"Você extrai exclusivamente filtros de pesquisa de motos usadas de um pedido em português brasileiro. Responda APENAS com um objeto JSON válido sem markdown, sem texto adicional, com as chaves opcionais: brand, model, version, yearType (model ou make), yearFrom, yearTo, priceMin, priceMax, kmMin, kmMax, originCity, uf, radiusKm, sellerType (all, particular, loja). Nunca invente filtros ausentes. Se o pedido citar um único ano, use yearFrom e yearTo iguais. Dinheiro em reais como número simples (ex: oito mil = 8000). Cidade e UF apenas se explicitamente fornecidas ou inequivocamente identificáveis pelo nome geográfico. Se estiver ambíguo, omita o campo."},
         {role:"user",content:prompt}
       ],
       // A GLM usa raciocínio por padrão. Desativá-lo evita consumir o limite
@@ -439,12 +1015,19 @@ async function interpretRequest(message,uid,env){
       chat_template_kwargs:{enable_thinking:false},
       response_format:{type:"json_object"},
       max_completion_tokens:650,temperature:0,stream:false
-    });
+    }),18000,"AI_TIMEOUT");
     const raw=intentText(model),start=raw.indexOf("{"),end=raw.lastIndexOf("}");
     if(start<0||end<=start)throw Error("AI_EMPTY_RESPONSE");
     let parsed;
     try{parsed=JSON.parse(raw.slice(start,end+1));}catch{throw Error("AI_INVALID_JSON");}
-    const filters=safeIntent(parsed);
+    const filters=safeIntent(parsed),local=parseLocalIntent(prompt);
+    if(local.warnings.length)return response({error:"Pedido ambíguo. Confira os limites e as unidades.",code:"INTENT_NEEDS_CLARIFICATION",warnings:local.warnings},422);
+    for(const key of ["yearFrom","yearTo","yearType","priceMin","priceMax","kmMin","kmMax","radiusKm"]){
+      if(Object.hasOwn(local.filters,key)&&local.filters[key]!=="")filters[key]=local.filters[key];else delete filters[key];
+    }
+    if(local.filters.brand&&filters.brand&&normalized(local.filters.brand)!==normalized(filters.brand))throw Error("AI_INCOMPLETE_FILTERS");
+    for(const key of ["brand","version","originCity","uf"])if(Object.hasOwn(local.filters,key))filters[key]=local.filters[key];
+    if(local.filters.model&&/[A-Za-z]/.test(local.filters.model))filters.model=local.filters.model;
     if(!filters.brand||!filters.model)throw Error("AI_INCOMPLETE_FILTERS");
     const data={filters,mode:"workers-ai",model:"glm-4.7-flash",notice:"Filtros interpretados por IA; confira os campos antes de considerar qualquer anúncio."};
     if(intentCache.size>30)intentCache.clear();
@@ -455,18 +1038,20 @@ async function interpretRequest(message,uid,env){
     // do modelo é exposta. O código distingue erro do modelo de erro de formato.
     const rawCode=String(e?.message||"");
     const code=rawCode==="AI_EMPTY_RESPONSE"?"AI_EMPTY_RESPONSE":
+      rawCode==="AI_TIMEOUT"?"AI_TIMEOUT":
       rawCode==="AI_INVALID_JSON"?"AI_INVALID_JSON":
       rawCode==="AI_INCOMPLETE_FILTERS"?"AI_INCOMPLETE_FILTERS":
       /quota|rate limit|429|capacity|3040/i.test(rawCode)?"AI_CAPACITY_LIMIT":
       "AI_INFERENCE_FAILED";
     const reason={
+      AI_TIMEOUT:"A inferência excedeu 18 segundos; nenhuma repetição automática foi feita.",
       AI_EMPTY_RESPONSE:"O modelo respondeu sem texto utilizável.",
       AI_INVALID_JSON:"O modelo retornou uma resposta que não é JSON válido.",
       AI_INCOMPLETE_FILTERS:"A IA não conseguiu identificar com segurança a marca e o modelo.",
       AI_CAPACITY_LIMIT:"O serviço gratuito de IA atingiu um limite ou está sem capacidade.",
       AI_INFERENCE_FAILED:"Falha de inferência da Cloudflare. Consulte o log do Worker se persistir."
     }[code];
-    console.error("Evolution Radar /interpret:",code,rawCode.slice(0,180));
+    console.error("Evolution Radar /interpret:",code);
     return response({error:"Interpretação pela IA não concluída.",code,detail:reason},code==="AI_CAPACITY_LIMIT"?503:502);
   }
 }
@@ -567,7 +1152,7 @@ async function deleteRegisteredUser(payload,token,env){
 export default {
   async fetch(request,env){
     if(request.method==="GET"&&new URL(request.url).pathname==="/health")
-      return response({service:"Evolution Radar IA",version:"2026-11-12.5",capabilities:["search","interpret","municipal-radius","account-deletion"],radiusMethod:"approximate-municipal-centers",status:"online",aiBinding:env.AI?.run?"connected":"missing",aiInference:"not-tested-by-health",accountDeletionConfigured:!!env.FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON});
+      return response({service:"Evolution Radar IA",version:"2026-11-13.rc1",capabilities:["search","interpret","municipal-radius","account-deletion","page-availability","field-evidence","bounded-search"],radiusMethod:"approximate-municipal-centers",status:"online",aiBinding:env.AI?.run?"connected":"missing",aiInference:"not-tested-by-health",accountDeletionConfigured:!!env.FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON});
     if(request.method==="OPTIONS")return new Response(null,{status:204,headers:cors});
     const endpoint=new URL(request.url).pathname;
     if(!["/search","/interpret","/admin/delete-user"].includes(endpoint)||request.method!=="POST")return response({error:"Endpoint inexistente"},404);
@@ -580,21 +1165,26 @@ export default {
     if(!valid)return response({error:"Usuário não autorizado"},403);
     if(endpoint==="/admin/delete-user"&&valid!==String(env.ALLOWED_UID))return response({error:"Somente o administrador pode excluir contas."},403);
     let payload;
-    try{if(Number(request.headers.get("Content-Length")||0)>4000)return response({error:"Requisição muito grande"},413);payload=await request.json();}catch{return response({error:"JSON inválido"},400);}
+    try{if(Number(request.headers.get("Content-Length")||0)>4000)return response({error:"Requisição muito grande"},413);const raw=await readLimitedBody(request,4000);if(raw.truncated)return response({error:"Requisição muito grande"},413);payload=JSON.parse(raw.text);}catch{return response({error:"JSON inválido"},400);}
     if(endpoint==="/admin/delete-user")return deleteRegisteredUser(payload,token,env);
     if(endpoint==="/interpret")return interpretRequest(payload?.message,valid,env);
     if(!validFilters(payload?.filters))return response({error:"Informe marca, modelo, cidade e UF válidos"},400);
-    // Limite de consumo: cada consulta faz até 3 buscas básicas e até 5 extrações básicas.
+    // Até 4 buscas básicas, 5 páginas públicas e 5 URLs de extração por consulta.
     // Repetições no mesmo isolate dentro de 10 min usam cache após validar Firebase.
     const f=payload.filters;
-    const cacheKey=JSON.stringify([f.brand,f.model,f.version,f.yearType,f.yearFrom,f.yearTo,f.priceMin,f.priceMax,f.kmMax,f.originCity,f.uf,f.radiusKm,f.sellerType]);
+    const cacheKey=JSON.stringify([f.brand,f.model,f.version,f.yearType,f.yearFrom,f.yearTo,f.priceMin,f.priceMax,f.kmMin,f.kmMax,f.originCity,f.uf,f.radiusKm,f.sellerType,f.requireRiskEvidence]);
     const entry=searchMemory.get(cacheKey);
     if(entry&&Date.now()-entry.time<600000)return response({...entry.data,cache:true});
+    const running=inFlightSearches.get(cacheKey);
+    if(!running&&!consumeRequestBudget(requestBudget,"search:"+valid))return response({error:"Limite temporário de consultas atingido. Aguarde antes de repetir.",code:"SEARCH_REQUEST_LIMIT"},429);
     try{
-      const data=await collect(f,env);
+      const operation=running||collect(f,env);
+      if(!running)inFlightSearches.set(cacheKey,operation);
+      const data=await operation;
       if(searchMemory.size>40)searchMemory.clear();
       searchMemory.set(cacheKey,{time:Date.now(),data});
-      return response({...data,cache:false});
-    }catch(e){return response({error:"Consulta externa não concluída: "+text(e?.message||"erro",160)},502);}
+      return response({...data,cache:false,coalesced:!!running});
+    }catch(e){const code=/^[A-Z0-9_]{1,60}$/.test(e?.code||"")?e.code:"SEARCH_FAILED";return response({error:"Consulta externa não concluída.",code,coverage:e?.coverage||null},code==="TAVILY_RATE_LIMIT"?429:502);}
+    finally{if(!running)inFlightSearches.delete(cacheKey);}
   }
 };

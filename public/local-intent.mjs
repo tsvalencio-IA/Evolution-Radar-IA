@@ -1,3 +1,5 @@
+import {parseIntentQuantities} from "./intent-quantities.mjs";
+import {resolveMunicipality,municipalitiesInText} from "./br-municipios.mjs";
 // Alternativa determinística, gratuita e explícita quando /interpret não está publicado.
 // Não substitui IA e não inventa anúncios, localidades, versões ou preços.
 const norm = value => String(value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
@@ -6,6 +8,7 @@ const inText = (text, pattern) => pattern.test(text);
 export function parseLocalIntent(message, previousFilters = {}) {
   const raw = String(message ?? "").slice(0, 450);
   const s = norm(raw);
+  const quantities=parseIntentQuantities(s),typedAt=index=>quantities.evidence.some(e=>index>=e.start&&index<e.end);
   const previous = previousFilters && typeof previousFilters === "object" ? previousFilters : {};
   const filters = {}, warnings = [];
   const brands = ["honda", "yamaha", "suzuki", "kawasaki", "bmw", "bajaj", "shineray", "dafra", "triumph", "harley-davidson", "royal enfield"]
@@ -20,7 +23,7 @@ export function parseLocalIntent(message, previousFilters = {}) {
   if (hondaVersions.length > 1) warnings.push("Você citou versões diferentes (" + hondaVersions.join(" e ") + "). Escolha apenas uma.");
   if (hasFactor && hasHondaCG) warnings.push("Foram citados modelos de fabricantes diferentes. Especifique somente uma moto.");
 
-  const displacement = s.match(/\b(110|115|125|135|150|160|190|200|250|300|350|400|600|650)\b/);
+  const displacement = [...s.matchAll(/\b(110|115|125|135|150|160|190|200|250|300|350|400|600|650)\b/g)].find(m=>!typedAt(m.index));
   if (hasFactor && !hasHondaCG) {
     if (filters.brand && norm(filters.brand) !== "yamaha") warnings.push("Factor/YBR não corresponde à marca informada.");
     else {
@@ -42,23 +45,24 @@ export function parseLocalIntent(message, previousFilters = {}) {
     if (filters.brand && norm(filters.brand) !== "yamaha") warnings.push("Fazer não corresponde à marca informada.");
     else {filters.brand = "Yamaha"; filters.model = displacement ? "Fazer " + displacement[1] : "Fazer"; filters.version = "";}
   }
+  const namedModels=[[/\bdr\s*160\b/,"Suzuki","DR160"],[/\bninja\s*400\b/,"Kawasaki","Ninja 400"],[/\b(?:mt\s*03)\b/,"Yamaha","MT-03"],[/\bcb\s*300\b/,"Honda","CB 300"]];
+  for(const [pattern,brand,model] of namedModels)if(pattern.test(s)){
+    if(filters.brand&&norm(filters.brand)!==norm(brand))warnings.push("O modelo citado não corresponde à marca informada.");
+    else Object.assign(filters,{brand,model,version:""});
+  }
 
-  const range = s.match(/\b((?:19|20)\d{2})\s*(?:a|ate|e|-)\s*((?:19|20)\d{2})\b/);
+  const range = [...s.matchAll(/\b((?:19|20)\d{2})\s*(?:a|ate|e|-)\s*((?:19|20)\d{2})\b/g)].find(m=>!typedAt(m.index)&&!typedAt(m.index+m[0].length-m[2].length));
   if (range) {
     const start = Number(range[1]), end = Number(range[2]);
     if (start <= end) {filters.yearFrom = String(start); filters.yearTo = String(end);}
     else warnings.push("A faixa de anos está invertida.");
   } else {
-    const years = [...s.matchAll(/\b((?:19|20)\d{2})\b/g)].map(x => x[1]);
+    const years = [...s.matchAll(/\b((?:19|20)\d{2})\b/g)].filter(m=>!typedAt(m.index)).map(x => x[1]);
     if (years.length === 1) {filters.yearFrom = years[0]; filters.yearTo = years[0];}
     else if (years.length > 1) warnings.push("Há vários anos sem uma faixa clara. Especifique o intervalo.");
   }
-  const price = s.match(/\b(?:ate|no maximo de|abaixo de|limite de)\s*(r\$\s*)?(\d[\d.,]*)(?:\s*(mil))?\b/);
-  if (price) {
-    const v = price[2].replace(/\.(?=\d{3}(?:\D|$))/g, "").replace(",", ".");
-    const n = Number(v) * (price[3] ? 1000 : 1);
-    if (Number.isFinite(n) && n >= 3000 && n <= 1000000) filters.priceMax = String(n);
-  }
+  if(/\b(?:fabricacao|fabricada|fabricado)\b/.test(s))filters.yearType="make";
+  else if(filters.yearFrom||/\b(?:ano[- ]?modelo|modelo de)\b/.test(s))filters.yearType="model";
   // Cidades reconhecidas por nome inequívoco; jamais usar localização aproximada do aparelho.
   const places = [
     ["sao jose do rio preto", "São José do Rio Preto", "SP"],
@@ -85,30 +89,31 @@ export function parseLocalIntent(message, previousFilters = {}) {
     filters.originCity = "São José do Rio Preto";
     filters.uf = "SP";
   }
-  const ufExplicit = s.match(/\b(?:uf|estado)\s*[:\-]?\s*(sp|mg|go|pr|rs|rj|sc|mt|ms|ba|df|es|pa|pb|pe|ce|rn|ro|rr|to|ma|pi|al|se|ac|am|ap)\b/);
+  let ufExplicit = s.match(/\b(?:uf|estado)\s*[:\-]?\s*(sp|mg|go|pr|rs|rj|sc|mt|ms|ba|df|es|pa|pb|pe|ce|rn|ro|rr|to|ma|pi|al|se|ac|am|ap)\b/);
+  if(!ufExplicit)for(const point of municipalitiesInText(raw)){
+    const name=norm(point.name),index=s.indexOf(name);if(index<0)continue;
+    const suffix=s.slice(index+name.length).match(/^[\s/,-]+(sp|mg|go|pr|rs|rj|sc|mt|ms|ba|df|es|pa|pb|pe|ce|rn|ro|rr|to|ma|pi|al|se|ac|am|ap)\b/);
+    if(suffix&&(suffix[1].toUpperCase()===point.uf||!["se","to","am"].includes(suffix[1])||raw.includes(suffix[1].toUpperCase()))){ufExplicit=suffix;break;}
+  }
   if (ufExplicit) {
     const uf = ufExplicit[1].toUpperCase();
     if (filters.uf && filters.uf !== uf) warnings.push("A cidade informada não corresponde à UF solicitada.");
     else filters.uf = uf;
   }
+  if(!filters.originCity&&/\b(?:em|cidade|origem|municipio)\b/.test(s)&&!(/\brio preto\b/.test(s)&&!(/\bsp\b/.test(s)||norm(previous.originCity)==="sao jose do rio preto"))){
+    const places=municipalitiesInText(raw,filters.uf||"");
+    if(places.length===1){filters.originCity=places[0].name;filters.uf=places[0].uf;}
+    else if(places.length>1)warnings.push("Cidade ambígua; informe nome completo e UF.");
+  }
   const seller = /\bparticular(?:es)?\b/.test(s) ? "particular" : /\b(?:loja|revenda|concessionaria)\b/.test(s) ? "loja" : "";
   if (seller) filters.sellerType = seller;
-  const radius = s.match(/\braio(?:\s+de)?\s*(\d{1,4})\s*(?:km|quilometros)\b/);
-  if (radius && Number(radius[1]) <= 1000) filters.radiusKm = radius[1];
-  const km = s.match(/\b(?:ate|menos de|no maximo de)\s*(\d{1,3}(?:[.,]\d{3})*)\s*(?:km|quilometros)\s*(?:rodados)?\b/);
-  if (km && !radius) {
-    const kmValue = Number(km[1].replace(/[.,]/g,""));
-    if (kmValue > 0 && kmValue <= 300000) filters.kmMax = String(kmValue);
-  }
-  // Quantia escrita por extenso é interpretada apenas quando clara.
-  const priceWords = s.match(/\b(?:ate|no maximo|abaixo de)\s*(?:r\$\s*)?(oito|sete|seis|cinco|nove|dez|onze|doze|quinze|vinte)\s+mil\b/);
-  if (priceWords) {
-    const amounts={cinco:5,seis:6,sete:7,oito:8,nove:9,dez:10,onze:11,doze:12,quinze:15,vinte:20};
-    filters.priceMax = String(amounts[priceWords[1]]*1000);
-  }
-  if (/\b(?:preta|preto|vermelha|vermelho|azul|branca|branco)\b/.test(s) &&
-      !/\brio preto\b/.test(s)) warnings.push("A cor da moto não é um filtro disponível nesta pesquisa.");
-  return {filters, warnings, mode:"local", notice:"Interpretação por regras locais, sem usar IA remota. Confira os filtros."};
+  Object.assign(filters,quantities.filters);warnings.push(...quantities.warnings);
+  for(const [a,b,label] of [["priceMin","priceMax","preço"],["kmMin","kmMax","quilometragem"]])
+    if(filters[a]!==undefined&&filters[a]!==""&&filters[b]!==undefined&&filters[b]!==""&&Number(filters[a])>Number(filters[b]))warnings.push("A faixa de "+label+" está invertida.");
+  const colorText=filters.originCity?s.replace(norm(filters.originCity),""):s;
+  if (/\b(?:preta|preto|vermelha|vermelho|azul|branca|branco)\b/.test(colorText) &&
+      !/\b(?:rio preto|ribeirao preto)\b/.test(s)) warnings.push("A cor da moto não é um filtro disponível nesta pesquisa.");
+  return {filters, warnings:[...new Set(warnings)], mode:"local", evidence:quantities.evidence, recognized:Object.keys(filters).length>0, notice:"Interpretação por regras locais, sem usar IA remota. Confira os filtros."};
 }
 
 export function mergeIntentFilters(previous, interpreted) {
@@ -119,8 +124,8 @@ export function mergeIntentFilters(previous, interpreted) {
   // Não transportar filtros de outra moto (ex.: Yamaha Factor → Kawasaki Ninja).
   // Preservar apenas localização e preferências geográficas, sem inventar dados.
   const base=changedVehicle?{
-    ...original,version:"",yearFrom:"",yearTo:"",priceMin:"",priceMax:"",
-    kmMax:"",sellerType:"all"
+    ...original,model:incoming.model||"",version:"",yearFrom:"",yearTo:"",priceMin:"",priceMax:"",
+    kmMin:"",kmMax:"",sellerType:"all"
   }:original;
   return {...base,...incoming};
 }

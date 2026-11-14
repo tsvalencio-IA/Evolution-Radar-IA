@@ -25,7 +25,8 @@ test("localização OLX em várias linhas reconhece cidade após bairro e não u
 test("marca comprovada nos detalhes dispensa marca repetida no título e preserva pendências",()=>{
   const item={title:"Moto Factor 125i 2018 FLEX",url,fields:parseFacts(olx,"",filters),extractionStatus:"extracted"};
   item.assessment=gradeListing(item,filters);
-  assert.equal(item.assessment.bucket,"prequalified");
+  assert.equal(item.assessment.bucket,"pending");
+  assert.ok(item.assessment.reasons.some(x=>/Preço|Link/.test(x)));
   const normalized=normalizeWebLeads([item])[0];
   assert.equal(classifyDiscoveryForFilters(normalized,filters).category,"in-area");
   assert.equal(normalized.fields.brand,"Yamaha");
@@ -70,7 +71,7 @@ test("cache separa ano de fabricação de ano modelo na mesma pesquisa",async()=
     const second=await (await worker.fetch(query("make"),env)).json();
     assert.equal(first.items[0].assessment.bucket,"pending");
     assert.equal(second.items[0].assessment.bucket,"outside");
-    assert.equal(second.cache,false);assert.equal(searches,6);
+    assert.equal(second.cache,false);assert.equal(searches,8);
   }finally{globalThis.fetch=previous;}
 });
 test("editar nome ou permissões não reativa colaborador suspenso ou revogado",async()=>{

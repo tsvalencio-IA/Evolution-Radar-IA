@@ -28,12 +28,12 @@ test("50 km de Rio Preto aceitam cidade próxima e excluem Sete Barras",()=>{
  const bad=parseFacts(sample(far,"SP"),"Honda CG 125 Titan",filters);
  assert.equal(good.city,near);
  assert.equal(bad.city,far);
- assert.equal(gradeListing({title:"Honda CG 125 Titan",fields:good,extractionStatus:"extracted"},filters).bucket,"prequalified");
+ assert.equal(gradeListing({title:"Honda CG 125 Titan",fields:good,extractionStatus:"extracted",availability:{status:"available"}},filters).bucket,"prequalified");
  assert.equal(gradeListing({title:"Honda CG 125 Titan",fields:bad,extractionStatus:"extracted"},filters).bucket,"outside");
 });
 test("rejeita cilindrada diferente e não inventa oferta compatível",()=>{
  const fields=parseFacts(sample(near,"SP"),"Honda CG 125 Titan",filters);
- assert.equal(gradeListing({title:"Honda CG 250 Titan",fields,extractionStatus:"extracted"},filters).bucket,"outside");
+ assert.equal(gradeListing({title:"Honda CG 250 Titan",fields:{...fields,model:"CG 250"},extractionStatus:"extracted"},filters).bucket,"outside");
 });
 test("interface oculta catálogos, localizações desconhecidas e anúncios fora do raio",()=>{
  const make=(city,uf,title="Honda CG 125 Titan 2023")=>({title,pageType:"individual-candidate",fields:{city,uf,price:10500,km:18000,yearModel:2023}});

@@ -8,7 +8,7 @@ test("versão Fan é excluída",()=>assert.equal(evaluateLead({...lead,version:"
 test("anúncio sem KM fica pendente",()=>assert.equal(evaluateLead({...lead,km:null},f).bucket,"pending"));
 test("município distinto sem distância verificada fica pendente",()=>assert.equal(evaluateLead({...lead,city:"Urupês"},f).bucket,"pending"));
 test("distância informada sem prova fica pendente",()=>assert.equal(evaluateLead({...lead,city:"Urupês",distanceKm:90,distanceVerified:false},f).bucket,"pending"));
-test("distância verificada acima do raio exclui",()=>assert.equal(evaluateLead({...lead,city:"Urupês",distanceKm:180,distanceVerified:true},f).bucket,"outside"));
+test("distância rodoviária declarada não substitui raio geográfico entre sedes",()=>assert.equal(evaluateLead({...lead,city:"Urupês",distanceKm:180,distanceVerified:true},f).bucket,"pending"));
 test("URL com tracking não cria duplicata nova",()=>assert.equal(canonicalUrl("https://example.org/moto/1?utm_source=abc"),"https://example.org/moto/1"));
 test("deduplicação exata",()=>assert.equal(findDuplicate({...lead,id:"b",url:"https://example.org/moto/1?utm_source=abc"},[lead]).type,"same-url"));
 test("FIPE e lucro nunca são presumidos",()=>assert.equal(calculateScenario({purchase:"13000",resale:"17000"}).valid,false));
