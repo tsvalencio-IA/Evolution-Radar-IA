@@ -358,6 +358,13 @@ async function assistantSearch(){
       }
     }
     if(!current())return;
+    if(local.needsRemoteModel&&local.modelCue){
+      const model=String(interpreted.model??"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9]/g,"");
+      if(!model.includes(local.modelCue)){
+        label.textContent="O modelo citado não foi confirmado pela IA. Confira a marca e o modelo exatos; nenhuma pesquisa foi iniciada.";
+        return;
+      }
+    }
     if(!interpreted.brand||!interpreted.model){label.textContent="Informe marca e modelo exato. Nenhuma pesquisa foi iniciada.";return;}
     const f=mergeIntentFilters(saved,interpreted);
     const missing=["brand","model","originCity","uf"].filter(k=>!String(f[k]||"").trim());
