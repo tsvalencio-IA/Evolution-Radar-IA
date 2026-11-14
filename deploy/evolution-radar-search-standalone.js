@@ -232,15 +232,32 @@ export function parseLocalIntent(message, previousFilters = {}) {
     else Object.assign(filters,{brand,model,version:""});
   }
 
+  // Modelo explícito não reconhecido (ex.: XRE 300) requer interpretação remota.
+  // Pedido parcial como "Honda em Campinas" ainda pode manter o modelo atual.
+  const brandWord=filters.brand?norm(filters.brand).replace(/[^a-z0-9-]/g,"\\  const range = [...s.matchAll(/\b((?:19|20)\d{2})\s*(?:a|ate|e|-)\s*((?:19|20)\d{2})\b/g)].find(m=>!typedAt(m.index)&&!typedAt(m.index+m[0].length-m[2].length));"):"";
+  const afterBrand=brandWord?s.match(new RegExp("\\b"+brandWord+"\\s+([a-z][a-z0-9-]{1,24})\\b"))?.[1]:"";
+  const neutralWords=new Set(["em","no","na","nos","nas","de","do","da","dos","das","para","por","com","ano","anos","entre","ate","partir","a","e","modelo","fabricacao","moto","motocicleta","usada","usado","sem","preco","valor","maximo","minimo","raio","reais"]);
+  const needsRemoteModel=Boolean(filters.brand&&!filters.model&&
+    (displacement||(afterBrand&&!neutralWords.has(afterBrand))));
+
   const range = [...s.matchAll(/\b((?:19|20)\d{2})\s*(?:a|ate|e|-)\s*((?:19|20)\d{2})\b/g)].find(m=>!typedAt(m.index)&&!typedAt(m.index+m[0].length-m[2].length));
   if (range) {
     const start = Number(range[1]), end = Number(range[2]);
     if (start <= end) {filters.yearFrom = String(start); filters.yearTo = String(end);}
     else warnings.push("A faixa de anos está invertida.");
   } else {
-    const years = [...s.matchAll(/\b((?:19|20)\d{2})\b/g)].filter(m=>!typedAt(m.index)).map(x => x[1]);
-    if (years.length === 1) {filters.yearFrom = years[0]; filters.yearTo = years[0];}
-    else if (years.length > 1) warnings.push("Há vários anos sem uma faixa clara. Especifique o intervalo.");
+    const years = [...s.matchAll(/\b((?:19|20)\d{2})\b/g)].filter(m=>!typedAt(m.index));
+    if(years.length===1){
+      const one=years[0],before=s.slice(Math.max(0,one.index-42),one.index),after=s.slice(one.index+one[0].length,one.index+one[0].length+42);
+      const minimum=/\b(?:a partir de|desde|no minimo(?: de)?|pelo menos|depois de)\s*$/.test(before)||
+        /^\s*(?:em diante|ou mais nov[ao]s?|ou mais recentes?|para (?:cima|frente))\b/.test(after);
+      const maximum=/\b(?:ate|no maximo(?: de)?|antes de)\s*$/.test(before)||
+        /^\s*(?:ou mais antig[ao]s?|ou anteriores?)\b/.test(after);
+      if(minimum&&maximum)warnings.push("Limites de ano contraditórios; informe a faixa desejada.");
+      else if(minimum){filters.yearFrom=one[1];filters.yearTo="";}
+      else if(maximum){filters.yearFrom="";filters.yearTo=one[1];}
+      else{filters.yearFrom=one[1];filters.yearTo=one[1];}
+    }else if(years.length>1)warnings.push("Há vários anos sem uma faixa clara. Especifique o intervalo.");
   }
   if(/\b(?:fabricacao|fabricada|fabricado)\b/.test(s))filters.yearType="make";
   else if(filters.yearFrom||/\b(?:ano[- ]?modelo|modelo de)\b/.test(s))filters.yearType="model";
@@ -294,7 +311,7 @@ export function parseLocalIntent(message, previousFilters = {}) {
   const colorText=filters.originCity?s.replace(norm(filters.originCity),""):s;
   if (/\b(?:preta|preto|vermelha|vermelho|azul|branca|branco)\b/.test(colorText) &&
       !/\b(?:rio preto|ribeirao preto)\b/.test(s)) warnings.push("A cor da moto não é um filtro disponível nesta pesquisa.");
-  return {filters, warnings:[...new Set(warnings)], mode:"local", evidence:quantities.evidence, recognized:Object.keys(filters).length>0, notice:"Interpretação por regras locais, sem usar IA remota. Confira os filtros."};
+  return {filters, warnings:[...new Set(warnings)], mode:"local", evidence:quantities.evidence, recognized:Object.keys(filters).length>0, needsRemoteModel, notice:"Interpretação por regras locais, sem usar IA remota. Confira os filtros."};
 }
 
 export function mergeIntentFilters(previous, interpreted) {
@@ -1007,7 +1024,7 @@ async function interpretRequest(message,uid,env){
   try{
     const model=await withDeadline(()=>env.AI.run("@cf/zai-org/glm-4.7-flash",{
       messages:[
-        {role:"system",content:"Você extrai exclusivamente filtros de pesquisa de motos usadas de um pedido em português brasileiro. Responda APENAS com um objeto JSON válido sem markdown, sem texto adicional, com as chaves opcionais: brand, model, version, yearType (model ou make), yearFrom, yearTo, priceMin, priceMax, kmMin, kmMax, originCity, uf, radiusKm, sellerType (all, particular, loja). Nunca invente filtros ausentes. Se o pedido citar um único ano, use yearFrom e yearTo iguais. Dinheiro em reais como número simples (ex: oito mil = 8000). Cidade e UF apenas se explicitamente fornecidas ou inequivocamente identificáveis pelo nome geográfico. Se estiver ambíguo, omita o campo."},
+        {role:"system",content:"Você extrai exclusivamente filtros de pesquisa de motos usadas de um pedido em português brasileiro. Responda APENAS com um objeto JSON válido sem markdown, sem texto adicional, com as chaves opcionais: brand, model, version, yearType (model ou make), yearFrom, yearTo, priceMin, priceMax, kmMin, kmMax, originCity, uf, radiusKm, sellerType (all, particular, loja). Nunca invente filtros ausentes. Se o pedido citar ano exato, use yearFrom e yearTo iguais; se disser a partir de/desde um ano, use apenas yearFrom; se disser até um ano, use apenas yearTo. Dinheiro em reais como número simples (ex: oito mil = 8000). Cidade e UF apenas se explicitamente fornecidas ou inequivocamente identificáveis pelo nome geográfico. Se estiver ambíguo, omita o campo."},
         {role:"user",content:prompt}
       ],
       // A GLM usa raciocínio por padrão. Desativá-lo evita consumir o limite
