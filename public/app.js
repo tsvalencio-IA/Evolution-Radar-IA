@@ -322,7 +322,7 @@ async function assistantSearch(){
     }
     let interpreted=local.filters;
     const locallyMerged=mergeIntentFilters(saved,interpreted);
-    const completeLocal=local.recognized===true&&!!(locallyMerged.brand&&locallyMerged.model);
+    const completeLocal=local.recognized===true&&!local.needsRemoteModel&&!!(locallyMerged.brand&&locallyMerged.model);
     if(completeLocal){
       interpreted=locallyMerged;
       // Evita depender de /interpret quando o pedido já pode ser interpretado localmente.
